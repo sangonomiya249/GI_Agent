@@ -508,7 +508,8 @@ def _launch_bettergi(open_id):
     else:
         from skills.game_control import setup_task_hint
 
-        print("❌ 未找到名为 StartBetterGI 的计划任务（README 第 4 步尚未完成）。")
+        print("❌ 未找到名为 StartBetterGI 的计划任务（免 UAC 那一步还没做）。")
+        print("   见 docs/BETTERGI_SETUP.md 第 4 节「免管理员确认启动」")
         print(f"💡 一键修复：以管理员身份运行 {setup_task_hint()}")
 
     # 🌟 兜底：计划任务不可用时，直接拉起 BetterGI（非管理员会弹 UAC 授权窗口）

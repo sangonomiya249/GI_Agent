@@ -7,6 +7,7 @@
 浏览器档案目录（.studio-profile）当前多大 —— 并给出"能省多少"的结论。
 """
 
+import glob
 import os
 import sys
 
@@ -40,6 +41,22 @@ def mb(value):
     return value / 1024 / 1024
 
 
+def find_site_packages():
+    """找虚拟环境的 site-packages；`venv` 与 `.venv` 都认。
+
+    Windows 是 `venv\\Lib\\site-packages`，Linux/WSL 是 `venv/lib/python3.x\\site-packages`；
+    而很多人（尤其 WSL）习惯把虚拟环境叫 `.venv`。找不到就返回空字符串 —— 报告照样要能跑完。
+    """
+    for name in ("venv", ".venv"):
+        base = os.path.join(PROJECT_ROOT, name)
+        candidates = [os.path.join(base, "Lib", "site-packages")]
+        candidates += sorted(glob.glob(os.path.join(base, "lib", "python*", "site-packages")))
+        for path in candidates:
+            if os.path.isdir(path):
+                return path
+    return ""
+
+
 def main():
     print("=" * 68)
     print("仓库各部分（顶层）")
@@ -63,9 +80,9 @@ def main():
     print("=" * 68)
     print("venv 里最胖的包（Python 依赖，占了仓库的大头）")
     print("=" * 68)
-    site = os.path.join(PROJECT_ROOT, "venv", "Lib", "site-packages")
+    site = find_site_packages()
     packages = {}
-    if os.path.isdir(site):
+    if site:
         for entry in os.listdir(site):
             path = os.path.join(site, entry)
             packages[entry] = dir_size(path) if os.path.isdir(path) else os.path.getsize(path)
@@ -73,20 +90,24 @@ def main():
             ((value, key) for key, value in packages.items()), reverse=True
         )[:12]:
             print(f"   {mb(size):8.1f} MB  {name}")
+    else:
+        print("   （没找到虚拟环境：依赖还没装，或者目录既不叫 venv 也不叫 .venv）")
 
-        optional_total = 0
-        print()
-        print("可以卸掉的可选依赖：")
-        for name, approx, why in OPTIONAL_PACKAGES:
-            hit = next((key for key in packages if key.lower() == name.lower()), None)
-            if hit:
-                optional_total += packages[hit]
-                print(f"   {mb(packages[hit]):8.1f} MB  {name} —— {why}")
-                print(f"              （卸掉：venv\\Scripts\\pip uninstall {name}）")
-            else:
-                print(f"   {'未安装':>11s}  {name} —— {why}")
-        if optional_total:
-            print(f"\n   ↳ 卸掉上面这些可以省约 {mb(optional_total):.1f} MB")
+    # 🌟 这一段**不放在 if 里面**：不管有没有装依赖都要说明"哪些是可选、能省多少"，
+    #    否则"没建 venv"的机器上这份报告就只是一堆数字，起不到体检的作用。
+    optional_total = 0
+    print()
+    print("可以卸掉的可选依赖：")
+    for name, approx, why in OPTIONAL_PACKAGES:
+        hit = next((key for key in packages if key.lower() == name.lower()), None)
+        if hit:
+            optional_total += packages[hit]
+            print(f"   {mb(packages[hit]):8.1f} MB  {name} —— {why}")
+            print(f"              （卸掉：venv\\Scripts\\pip uninstall {name}）")
+        else:
+            print(f"   {'未安装':>11s}  {name}（约 {approx} MB）—— {why}")
+    if optional_total:
+        print(f"\n   ↳ 卸掉上面这些可以省约 {mb(optional_total):.1f} MB")
 
     print()
     print("=" * 68)
