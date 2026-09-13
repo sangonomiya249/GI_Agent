@@ -111,9 +111,6 @@ python -m skills.gather_cooldown --materials      # 脚本组里能采的材料�
 
 ---
 
-
----
-
 ## 📚 文档索引
 
 | 文档 | 讲什么 |
