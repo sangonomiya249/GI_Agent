@@ -500,6 +500,20 @@ class ConfigTests(unittest.TestCase):
         with patch.dict("os.environ", {"QQ_BOT_REPLY_MODE": "verbose"}, clear=False):
             self.assertTrue(qq_bot.QQBotConfig.from_env().concise)
 
+    def test_reply_mode_off_means_one_way(self):
+        """单向模式：只收指令、不回话（回话在本地终端/Studio 显示）。"""
+        for raw in ("off", "OFF", " off "):
+            with self.subTest(raw=raw):
+                with patch.dict("os.environ", {"QQ_BOT_REPLY_MODE": raw}, clear=False):
+                    config = qq_bot.QQBotConfig.from_env()
+                self.assertEqual(config.reply_mode, qq_bot.REPLY_MODE_OFF)
+                self.assertTrue(config.replies_disabled)
+
+    def test_replies_disabled_only_in_off_mode(self):
+        self.assertFalse(qq_bot.QQBotConfig(reply_mode="compact").replies_disabled)
+        self.assertFalse(qq_bot.QQBotConfig(reply_mode="full").replies_disabled)
+        self.assertTrue(qq_bot.QQBotConfig(reply_mode="off").replies_disabled)
+
 
 class TextTests(unittest.TestCase):
     def test_strip_mentions(self):
@@ -1132,6 +1146,36 @@ class GatewayIntegrationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(formatter, qq_bot.chat_text.to_plain_text)
         self.assertTrue(concise)
         self.assertTrue(quiet)      # 进度消息不发（否则吃光"每条消息最多回 5 次"的额度）
+
+    async def test_run_forever_registers_input_only_in_off_mode(self):
+        """`QQ_BOT_REPLY_MODE=off` → 通道被标成单向：try_send 不发、改成本地回显。"""
+        channel_router.clear()
+        self.addCleanup(channel_router.clear)
+
+        async def handler(websocket):
+            await websocket.send(json.dumps({"op": 10, "d": {"heartbeat_interval": 60000}}))
+            await websocket.recv()
+            await websocket.send(json.dumps({"op": 7}))
+
+        async with ws_serve(handler, "127.0.0.1", 0) as server:
+            port = server.sockets[0].getsockname()[1]
+            client = await self._client_against(f"ws://127.0.0.1:{port}", lambda *args: None)
+            client.config.reconnect_delay = 30
+            client.config.reply_mode = qq_bot.REPLY_MODE_OFF
+            task = asyncio.create_task(client.run_forever())
+            for _ in range(100):
+                if channel_router.QQ_PREFIX in channel_router.registered_prefixes():
+                    break
+                await asyncio.sleep(0.02)
+            input_only = channel_router.is_input_only("qq:group:G1#M1")
+            task.cancel()
+            try:
+                await task
+            except asyncio.CancelledError:
+                pass
+            await client.aclose()
+
+        self.assertTrue(input_only)
 
 
     async def test_run_once_falls_back_to_direct_url_when_gateway_api_blocked(self):

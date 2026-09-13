@@ -282,7 +282,13 @@ class ChannelRoutingTests(AgentRouterTestBase):
     def test_feishu_target_falls_through(self):
         from api import feishu_api
         # 没配飞书时会静默跳过并返回 False（说明没被 QQ 通道截胡）
-        with patch.dict("os.environ", {"FEISHU_APP_ID": "", "FEISHU_APP_SECRET": ""}, clear=False):
+        # ⚠️ FEISHU_REPLY_MODE 也要显式打桩：本机 .env 里可能设成 off（单向模式），
+        #    否则这条用例会随开发机的配置时好时坏。
+        with patch.dict(
+            "os.environ",
+            {"FEISHU_APP_ID": "", "FEISHU_APP_SECRET": "", "FEISHU_REPLY_MODE": "on"},
+            clear=False,
+        ):
             self.assertFalse(feishu_api.send_feishu_msg("ou_me", "hello"))
         self.assertEqual(self.qq_sent, [])
 

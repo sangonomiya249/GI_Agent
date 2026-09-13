@@ -136,6 +136,10 @@ FIELD_GROUPS = (
             Field("FEISHU_APP_ID", "App ID", "secret", (), ""),
             Field("FEISHU_APP_SECRET", "App Secret", "secret", (), ""),
             Field("FEISHU_VERIFICATION_TOKEN", "校验 Token", "secret", (), ""),
+            Field("FEISHU_REPLY_MODE", "回话模式", "choice", ("on", "off"), "on",
+                  "on=照旧把审批屏 / 完成报告发到飞书；"
+                  "off=**单向模式**：飞书只用来下指令，Agent 的回话全部只显示在终端与 Studio 日志里"
+                  "（和 QQ_BOT_REPLY_MODE=off 一个意思）。"),
             Field("AUTO_START_FEISHU_BOT", "随 Agent 自动启动", "bool", (), "0",
                   "1=点「启动 Agent」时顺带把飞书服务端也拉起来。默认 0：它是 Webhook 服务（监听 5000 端口），"
                   "公网不可达（没做内网穿透）时收不到任何消息，白占一个窗口。"
@@ -155,9 +159,11 @@ FIELD_GROUPS = (
             Field("QQ_BOT_INTENTS", "订阅事件（位掩码）", "text", (), "",
                   "留空用默认：群聊/单聊 1<<25 + 频道@我 1<<30 + 频道私信 1<<12 = 1107300352。只玩群聊填 33554432。"),
             Field("QQ_BOT_RECONNECT_SECONDS", "断线重连间隔（秒）", "int", (), "5", "网关断开后等多久重连。"),
-            Field("QQ_BOT_REPLY_MODE", "回复详略", "choice", ("compact", "full"), "compact",
+            Field("QQ_BOT_REPLY_MODE", "回复详略", "choice", ("compact", "full", "off"), "compact",
                   "compact=QQ 只收「要执行什么」的审批屏，完整推理留在电脑端日志（推荐）；"
-                  "full=连大模型推理正文一起发到 QQ（手机上会刷屏、可能被切成好几条）。"),
+                  "full=连大模型推理正文一起发到 QQ（手机上会刷屏、可能被切成好几条）；"
+                  "off=**单向模式**：指令照收，但一句都不回 QQ —— 审批屏 / 完成报告 / 报错"
+                  "全部只显示在终端与 Studio 日志里，审批也在电脑上做（输入 y / t）。"),
             Field("QQ_BOT_BUTTONS", "审批屏挂按钮", "bool", (), "1",
                   "1=审批屏底部挂「✅ 执行 / 🧪 仅改配置 / 🚫 取消」按钮（点一下等于回复 y / t / 取消）。"
                   "按钮要在 QQ 开放平台开通（自定义按钮=内邀开通，模板按钮=申请使用）；"

@@ -22,6 +22,13 @@
   `quiet` 让 `bgi_controller` / `bgi_watcher` 跳过"正在下发配置…""备份目录…"这类进度消息。
   两者都是**实测踩出来的**：不精简时一条审批被切成 4 条；不安静时启动过程要刷 5 条，
   正好吃光官方"每条玩家消息最多回 5 次"的额度，最后 20 分钟的完成报告反而发不出去。
+
+* `set_input_only(prefix, True)`：**单向模式** —— 这个通道只用来"收指令"，
+  Agent 的回话（审批屏 / 完成报告 / 报错）不再外发，而是**原样打到本地终端与 Studio 日志**。
+  用来实现"QQ/飞书 下达指令 → 本机 Agent 执行，Agent 只在运行界面说话"。
+  实现方式是"拦在出口 + 本地回显"：通道发送函数根本不会被调用（不消耗平台额度、
+  也不会因为平台限制丢消息），内容一个字不少地留在电脑上 —— 否则你会在本地
+  看不到审批屏，也就无从批准 QQ 发来的那条指令。
 """
 
 from typing import Callable, Dict, Optional
@@ -40,7 +47,58 @@ _FORMATTERS: Dict[str, Callable[[str], str]] = {}
 #               导致 20 分钟后真正的完成报告发不出去。
 _CHAT_CHANNELS: Dict[str, Dict[str, bool]] = {}
 
+# 前缀 → 只收不发（单向模式，见模块文档）。命中时：通道发送函数**不调用**，
+# 内容原样打到本地终端（Studio 的日志就是它的 stdout）。
+_INPUT_ONLY: Dict[str, bool] = {}
+
+# 单向模式的说明只打一次，之后每条消息只加一行标记（免得刷屏）
+_INPUT_ONLY_NOTICE_SHOWN = False
+
 QQ_PREFIX = "qq:"
+
+
+def set_input_only(prefix: str, enabled: bool = True) -> None:
+    """把这个通道设成/取消"单向模式"（只收指令，不回话；回话改成本地回显）。"""
+    if not prefix:
+        raise ValueError("prefix 不能为空")
+    _INPUT_ONLY[str(prefix)] = bool(enabled)
+
+
+def _input_only_prefix(target: str) -> str:
+    """命中的单向前缀（最长匹配）；不是单向通道就返回空串。"""
+    best = ""
+    for prefix, enabled in _INPUT_ONLY.items():
+        text = str(target or "")
+        if enabled and text.startswith(prefix) and len(prefix) > len(best):
+            best = prefix
+    return best
+
+
+def is_input_only(target: str) -> bool:
+    """这个目标是不是"单向通道"（只收指令、不回话）。"""
+    return bool(_input_only_prefix(target))
+
+
+def echo_locally(label: str, text: str) -> None:
+    """单向模式下的本地回显：内容照原样打出来（终端 / Studio 日志都能看到）。"""
+    global _INPUT_ONLY_NOTICE_SHOWN
+    if not _INPUT_ONLY_NOTICE_SHOWN:
+        _INPUT_ONLY_NOTICE_SHOWN = True
+        print(
+            f"🔇 单向模式（{label}）：Agent 的回话不再发到聊天软件，全部只显示在本地 ——\n"
+            "   审批请在这里（终端输入 y / t，Studio 的输入框也行），完成报告与报错同样只在这里出现。"
+        )
+    print(f"🔇 [{label}] {text}")
+
+
+# 前缀 → 回显时给人看的名字（`qq:` → QQ）
+_PREFIX_LABELS = {"qq:": "QQ"}
+
+
+def reset_notices() -> None:
+    """测试用：把"提示只打一次"的状态清掉。"""
+    global _INPUT_ONLY_NOTICE_SHOWN
+    _INPUT_ONLY_NOTICE_SHOWN = False
 
 
 def register_sender(prefix: str, sender: Callable[[str, str], bool]) -> None:
@@ -72,6 +130,8 @@ def clear() -> None:
     _SENDERS.clear()
     _FORMATTERS.clear()
     _CHAT_CHANNELS.clear()
+    _INPUT_ONLY.clear()
+    reset_notices()
 
 
 def registered_prefixes():
@@ -134,8 +194,15 @@ def try_send(target: str, text: str) -> bool:
     sender = sender_for(target)
     if sender is None:
         return False
+    formatted = format_for(target, text)
+    prefix = _input_only_prefix(target)
+    if prefix:
+        # 单向模式：**不发**，但内容一定要在本地看到（否则审批屏就丢了，没法批准）
+        label = _PREFIX_LABELS.get(prefix, prefix.rstrip(":") or str(target))
+        echo_locally(label, formatted)
+        return True
     try:
-        return bool(sender(target, format_for(target, text)))
+        return bool(sender(target, formatted))
     except Exception as exc:  # 通道出错不能把主流程带崩
         print(f"❌ 通道投递失败（{target}）：{exc}")
         return False

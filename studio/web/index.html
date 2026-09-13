@@ -366,9 +366,9 @@
             <div><b>随 Agent 自动启动</b><span>点右上角「启动 Agent」时，<b>已填好配置</b>且勾了「随 Agent 自动启动」的通道会被一起唤醒；点「停止」或关窗口时一起关。开关存在 <code>AUTO_START_QQ_BOT</code>（默认 1）/ <code>AUTO_START_FEISHU_BOT</code>（默认 0）</span></div>
             <div><b>QQ 通道（轻量，不用装机器人框架）</b><span>在 <code>q.qq.com</code> 建一个机器人 → 把 AppID / AppSecret 填进「配置 → QQ 机器人」→ 回「远程通道」页点启动（或双击 <code>启动QQ机器人.bat</code> 单独跑）</span></div>
             <div><b>只认你自己</b><span><code>QQ_BOT_ALLOWED_USERS</code> 填你的 openid。留空时机器人会拒收所有指令，并把你的 openid 回给你 —— 先随便发一句抄进去再重启即可</span></div>
-            <div><b>在 QQ 里怎么用</b><span>群里 @机器人 或私聊发一句话（如「今天体力怎么花」）→ 出审批屏 → <b>点按钮 ✅ 执行 / 🧪 仅改配置 / 🚫 取消</b>（等价回复 <code>y</code> / <code>t</code> / <code>取消</code>），也可直接打字；<code>refresh</code> 刷展柜、<code>clear</code> 清记忆。手机上默认只发精简审批屏（<code>QQ_BOT_REPLY_MODE=compact</code>），完整推理在电脑端日志里</span></div>
+            <div><b>在 QQ 里怎么用</b><span>群里 @机器人 或私聊发一句话（如「今天体力怎么花」）→ 出审批屏 → <b>点按钮 ✅ 执行 / 🧪 仅改配置 / 🚫 取消</b>（等价回复 <code>y</code> / <code>t</code> / <code>取消</code>），也可直接打字；<code>refresh</code> 刷展柜、<code>clear</code> 清记忆。手机上默认只发精简审批屏（<code>QQ_BOT_REPLY_MODE=compact</code>），完整推理在电脑端日志里；设成 <code>off</code> 就是<b>单向模式</b>：QQ 只用来下指令，Agent 的回话（连审批屏也是）全部只显示在本机日志里，审批在电脑上做</span></div>
             <div><b>拿不到按钮权限？</b><span>消息按钮要平台【内邀开通】/【申请使用】；<b>单聊底部自定义菜单不需要</b>，跑一次 <code>python main.py qq --setup-menu</code> 就有「✅ 执行 / 🧪 测试 / 🚫 取消」</span></div>
-            <div><b>飞书通道</b><span>Webhook 模式，需要内网穿透 + 飞书开放平台配置。<b>默认不随 Agent 启动</b>（公网不可达时收不到消息，白占一个进程），需要就把 <code>AUTO_START_FEISHU_BOT</code> 设成 1</span></div>
+            <div><b>飞书通道</b><span>Webhook 模式，需要内网穿透 + 飞书开放平台配置。<b>默认不随 Agent 启动</b>（公网不可达时收不到消息，白占一个进程），需要就把 <code>AUTO_START_FEISHU_BOT</code> 设成 1；<code>FEISHU_REPLY_MODE=off</code> 同样是单向模式（只收指令不回话）</span></div>
           </div>
           <div class="hint">
             两条通道共用同一套逻辑（规划 / 审批 / 配置事务 / 回滚提示），回复靠 <code>target</code> 前缀自动分发，

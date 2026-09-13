@@ -46,7 +46,7 @@ QQ_BOT_ALLOWED_USERS=            # 允许指挥 Agent 的 openid（不是 QQ 号
 QQ_BOT_ALLOW_ANYONE=0            # 危险开关：1 = 任何 QQ 用户都能下指令
 QQ_BOT_INTENTS=                  # 留空用默认值（见下）
 QQ_BOT_RECONNECT_SECONDS=5       # 断线重连间隔
-QQ_BOT_REPLY_MODE=compact        # 回复详略：compact（默认）/ full
+QQ_BOT_REPLY_MODE=compact        # 回复详略：compact（默认）/ full / off（单向模式，见 2.3）
 QQ_BOT_BUTTONS=1                 # 审批屏挂按钮（需要平台开通，默认 1）
 QQ_BOT_WS_URL=                   # 进阶，通常不用填：直连网关地址
 ```
@@ -82,6 +82,31 @@ python main.py qq --show-menu    # 看当前菜单
 **也可以在 Studio（GI-Agent-Studio.exe）里跑**：左侧「远程通道」页直接启停、日志内嵌，
 点「启动 Agent」时会按 `AUTO_START_QQ_BOT`（默认 1）一起唤醒 —— 但**必须先填 AppID/Secret**，
 否则跳过并把缺哪一项写在通道日志里。详见 `docs/STUDIO.md` 第 3.1 节。
+
+### 2.3 单向模式：只收指令，不回话（`QQ_BOT_REPLY_MODE=off`）
+
+默认（`compact`）QQ 上会收到审批屏、完成报告、报错。如果你就是**人坐在电脑前**、
+只想拿手机当遥控器，可以把它调成**单向**：
+
+```ini
+QQ_BOT_REPLY_MODE=off     # QQ 只用来下指令
+FEISHU_REPLY_MODE=off     # 飞书同理（两个通道一个意思）
+```
+
+单向模式下：
+
+| | 行为 |
+| --- | --- |
+| 指令方向 | QQ/飞书 → 本机 Agent 照常（规划 / 审批 / 配置事务 / 执行全是同一套逻辑） |
+| 回话方向 | **一句都不发**：审批屏、完成报告、进度、报错全部只在**终端与 Studio 日志**里出现 |
+| 审批在哪做 | 电脑上 —— 终端里输入 `y` / `t`，或 Studio 的输入框（指令从 QQ 来、批准在本地做） |
+| 为什么还能看到审批屏 | 实现是"拦在出口 + 本地回显"：通道发送函数根本不会被调用（不消耗平台额度），但内容会原样打到本地，否则你就看不到待批准的计划了 |
+
+> 手机上将收不到任何反馈 —— 这是刻意的。想回到"手机上也能看/也能点按钮"，
+> 把 `QQ_BOT_REPLY_MODE` 改回 `compact`（或 `full`）再重启机器人即可。
+>
+> 连"你不在白名单，你的 openid 是 xxx"这种提示也不发（单向就是单向）—— 那串 ID 会打印在
+> 本地日志里（`⛔ 未授权用户：xxx`），照着填 `QQ_BOT_ALLOWED_USERS` 即可。
 
 **同一个 AppID 只能跑一个进程**：两个进程一起连网关会互相抢会话（后一个 IDENTIFY 把前一个踢下线），
 表现是"消息时有时无 / 同一条回两遍 / 记忆文件互相覆盖"。所以启动时会拿一个系统文件锁

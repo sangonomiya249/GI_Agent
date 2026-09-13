@@ -292,6 +292,10 @@ def _header_kwarg(connector) -> str:
 
 REPLY_MODE_COMPACT = "compact"
 REPLY_MODE_FULL = "full"
+# 单向模式：只收指令，不回话。Agent 的审批屏 / 完成报告只打到本地终端与 Studio 日志
+# （见 api/channel_router.set_input_only）。适合"手机发指令、人就在电脑前看着"的用法。
+REPLY_MODE_OFF = "off"
+_REPLY_MODES = (REPLY_MODE_COMPACT, REPLY_MODE_FULL, REPLY_MODE_OFF)
 
 
 class QQBotConfig:
@@ -314,7 +318,9 @@ class QQBotConfig:
         self.ws_url = ws_url or DEFAULT_WS_URL
         # compact（默认）：审批消息只发"要执行什么"，完整推理留在电脑端日志
         # full：连推理正文一起发（手机上会刷屏、还可能被切成好几条）
-        self.reply_mode = REPLY_MODE_FULL if str(reply_mode or "").strip().lower() == REPLY_MODE_FULL else REPLY_MODE_COMPACT
+        # off：单向模式 —— 一句都不回，全部只在本地显示（审批在电脑上做）
+        mode = str(reply_mode or "").strip().lower()
+        self.reply_mode = mode if mode in _REPLY_MODES else REPLY_MODE_COMPACT
         # 审批屏是否挂按钮（执行 / 仅改配置 / 取消）。平台没开通按钮权限时会自动退回纯文本。
         self.buttons = bool(buttons)
         # 单聊快捷菜单的功能 ID → 按钮标识（`QQ_BOT_MENU_COMMANDS="我的ID=approve,另一个ID=test"`）
@@ -324,6 +330,11 @@ class QQBotConfig:
     @property
     def concise(self) -> bool:
         return self.reply_mode != REPLY_MODE_FULL
+
+    @property
+    def replies_disabled(self) -> bool:
+        """单向模式：只收指令、不回话（回话改成本地回显）。"""
+        return self.reply_mode == REPLY_MODE_OFF
 
     @classmethod
     def from_env(cls) -> "QQBotConfig":
@@ -1121,7 +1132,8 @@ class QQBotClient:
         if not self._allowed(user_id):
             print(f"⛔ 未授权用户：{user_id}（把它加进 .env 的 QQ_BOT_ALLOWED_USERS 才能指挥 Agent）")
             # 这是 async 上下文（在事件循环里跑），直接 await 就行，别用会阻塞的 send_threadsafe
-            await self.send_message(target, "⛔ 你这台 Agent 没有把你加入白名单，我不能执行。")
+            if not self.config.replies_disabled:
+                await self.send_message(target, "⛔ 你这台 Agent 没有把你加入白名单，我不能执行。")
             return {"text": command, "target": target, "user_id": user_id, "allowed": "0", "button": button_data}
 
         # 走和"玩家打字"完全相同的入口（含去重）：同一次点击不会被处理两遍
@@ -1161,12 +1173,16 @@ class QQBotClient:
         print(f"\n👤 旅行者 (QQ/{event_type}): {text}")
         if not self._allowed(user_id):
             print(f"⛔ 未授权用户：{user_id}（把它加进 .env 的 QQ_BOT_ALLOWED_USERS 才能指挥 Agent）")
-            # ⚠️ 这里在事件循环线程上：只能用 send_soon（不等待），否则自己等自己 30 秒
-            self.send_soon(
-                target,
-                "⛔ 这台 Agent 没有把你加入白名单，我不能接受指令。\n"
-                f"如果你就是机主：把下面的 ID 填进 .env 的 `QQ_BOT_ALLOWED_USERS` 再重启：\n`{user_id}`",
-            )
+            if self.config.replies_disabled:
+                # 单向模式：连白名单提示也不发（上面的 ID 已经在本地日志里，照着填即可）
+                print("   🔇 单向模式：这条提示也不发到 QQ —— 直接用上面这串 ID 填 QQ_BOT_ALLOWED_USERS。")
+            else:
+                # ⚠️ 这里在事件循环线程上：只能用 send_soon（不等待），否则自己等自己 30 秒
+                self.send_soon(
+                    target,
+                    "⛔ 这台 Agent 没有把你加入白名单，我不能接受指令。\n"
+                    f"如果你就是机主：把下面的 ID 填进 .env 的 `QQ_BOT_ALLOWED_USERS` 再重启：\n`{user_id}`",
+                )
             return {"text": text, "target": target, "user_id": user_id, "allowed": "0"}
 
         self._on_message(text, target, user_id, event_type)
@@ -1185,13 +1201,25 @@ class QQBotClient:
         channel_router.register_chat_channel(
             channel_router.QQ_PREFIX, concise=self.config.concise, quiet=True
         )
+        # 🌟 单向模式（QQ_BOT_REPLY_MODE=off）：只收指令，回话一律不发到 QQ，
+        #    改成本地回显 —— 审批屏、完成报告、报错都只在终端 / Studio 日志里出现。
+        channel_router.set_input_only(
+            channel_router.QQ_PREFIX, self.config.replies_disabled
+        )
         print(f"🤖 QQ 机器人已启动：{self.config.describe()}")
         print("   让 QQ 里 @机器人 或私聊它即可；Ctrl+C 退出。")
-        if self.config.concise:
+        if self.config.replies_disabled:
+            print(
+                "   🔇 单向模式：指令照收，但 Agent 的回话不再发到 QQ ——\n"
+                "      审批屏 / 完成报告 / 报错都只在这里（Studio 的日志页同样能看到）。\n"
+                "      要从手机上收到回复，把 .env 的 QQ_BOT_REPLY_MODE 改回 compact 即可。"
+            )
+        elif self.config.concise:
             print("   （回复精简模式：QQ 只发要执行什么，完整推理在电脑端日志；想全发设 QQ_BOT_REPLY_MODE=full）")
-        if self.config.buttons:
+        if self.config.buttons and not self.config.replies_disabled:
             print("   （审批屏会挂按钮：✅ 执行 / 🧪 仅改配置 / 🚫 取消；平台没开通按钮权限时会自动退回纯文本）")
-        await self.ensure_menu()      # 单聊自定义菜单：不需要内邀，属于按钮的替代方案
+        if not self.config.replies_disabled:
+            await self.ensure_menu()      # 单聊自定义菜单：不需要内邀，属于按钮的替代方案
 
         while True:
             try:
