@@ -31,7 +31,8 @@ def _write_log(path, entries):
             lines.append("此追踪脚本未正常走完！")
         lines.append(f'→ 脚本执行结束: "{route}", 耗时: 0分24.5秒')
         lines.append("------------------------------")
-    open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+    with open(path, "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
 
 
 class LogParsingTests(unittest.TestCase):
@@ -316,9 +317,124 @@ class ManualRecordTests(unittest.TestCase):
     def test_state_file_is_valid_json(self):
         gather_cooldown.mark_manual("月莲")
 
-        data = json.load(open(gather_cooldown.manual_state_path(), encoding="utf-8"))
+        with open(gather_cooldown.manual_state_path(), encoding="utf-8") as handle:
+            data = json.load(handle)
 
         self.assertIn("月莲", data)
+
+
+class MaterialExtractionTests(unittest.TestCase):
+    """材料名从哪来 —— 全部用玩家脚本组里的**真实形态**做用例。
+
+    实测踩到的坑（玩家报的）：说「去采集慕风蘑菇 / 沙脂蛹」时 Agent 说"认不出这种采集物"，
+    可这两种材料的路线明明就在地图素材组里。原因：老逻辑只看 `folderName` 的最后一段，
+    而他的组里是这种多级目录：
+
+        地方特产\\蒙德\\慕风蘑菇\\无草神@Tool_tingsu      ← 最后一段是"无草神"（变体标签）
+        地方特产\\须弥\\沙脂蛹\\1. 高成功率路线          ← 最后一段是"1. 高成功率路线"
+        地方特产\\璃月\\清水玉\\清水玉@某人\\A组鼋背       ← 最后一段是"组名"
+
+    现在改成**先读路线文件名**（`NN-材料名-地点-…` 是约定，最可靠），再从目录由深到浅
+    跳过作者后缀与这些分组/变体标签。
+    """
+
+    def _material(self, name, folder):
+        return gather_cooldown.material_from_project({"name": name, "folderName": folder})
+
+    # ---------- 文件名（优先） ----------
+
+    def test_route_filename_wins_over_a_variant_label_folder(self):
+        self.assertEqual(
+            self._material("01-慕风蘑菇-晨曦酒庄-7个.json",
+                           "地方特产\\蒙德\\慕风蘑菇\\无草神@Tool_tingsu"),
+            "慕风蘑菇",
+        )
+
+    def test_prefix_may_have_letters(self):
+        cases = (
+            ("09A-清心-层岩巨渊-32朵.json", "地方特产\\璃月\\清心", "清心"),
+            ("A01-清水玉-沉玉谷上谷-水面鼋背-6个.json",
+             "地方特产\\璃月\\清水玉\\清水玉@起个名字好难的喵\\A组鼋背", "清水玉"),
+            ("E01-紫晶块-稻妻-清籁岛-天云峠-6个.json",
+             "矿物\\紫晶块\\紫晶块[大剑]@蜜柑魚", "紫晶块"),
+        )
+        for name, folder, expected in cases:
+            with self.subTest(name=name):
+                self.assertEqual(self._material(name, folder), expected)
+
+    # ---------- 目录（兜底，文件名读不出来时） ----------
+
+    def test_folder_walk_skips_group_and_variant_labels(self):
+        cases = (
+            ("1灵濛山.json", "地方特产\\璃月\\清水玉\\清水玉@MOMO", "清水玉"),
+            ("1. 高成功率路线.json", "地方特产\\须弥\\沙脂蛹\\1. 高成功率路线", "沙脂蛹"),
+            ("A02-清水玉-沉玉谷上谷-鼋背-6个.json",
+             "地方特产\\璃月\\清水玉\\清水玉@某人\\B组静态", "清水玉"),
+        )
+        for name, folder, expected in cases:
+            with self.subTest(name=name):
+                self.assertEqual(self._material(name, folder), expected)
+
+    def test_underground_routes_merge_into_the_material(self):
+        """`夜泊石地下@烤鱼` 是"夜泊石的另一种路线"，不是另一种材料。"""
+        self.assertEqual(
+            self._material("02-夜泊石-地下矿区-9个.json", "地方特产\\璃月\\夜泊石\\夜泊石地下@烤鱼"),
+            "夜泊石",
+        )
+
+    def test_typo_names_are_normalised(self):
+        """路线作者写错的材料名归到正式名（本地百科字典里只有「蒲公英籽」「珊瑚真珠」）。"""
+        self.assertEqual(self._material("01-蒲公英-蒙德-5个.json", "地方特产\\蒙德\\蒲公英"),
+                         "蒲公英籽")
+        self.assertEqual(self._material("01-珊瑚珍珠-稻妻-5个.json", "地方特产\\稻妻\\珊瑚珍珠"),
+                         "珊瑚真珠")
+
+    def test_region_and_category_names_are_not_materials(self):
+        for folder in ("地方特产\\璃月", "地方特产", "地方特产\\须弥", "矿物"):
+            with self.subTest(folder=folder):
+                self.assertEqual(self._material("没有材料名的路线.json", folder), "")
+
+    def test_missing_fields_are_tolerated(self):
+        self.assertEqual(gather_cooldown.material_from_project(None), "")
+        self.assertEqual(gather_cooldown.material_from_project({}), "")
+        self.assertEqual(gather_cooldown.material_from_project({"name": "x.json"}), "")
+
+
+class RouteMaterialIndexTests(unittest.TestCase):
+    """`material_for_route` + 路线索引：日志里只有文件名，名字不规矩时回查脚本组。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log_dir = self.tmp.name
+        today = datetime.date.today().strftime("%Y%m%d")
+        self.log_path = os.path.join(self.log_dir, f"better-genshin-impact{today}.log")
+        for name, value in (("BGI_LOG_DIR", self.log_dir),):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gather_cooldown._ROUTE_INDEX_KEY["key"] = None
+
+    def test_letter_prefixed_route_name_in_the_log(self):
+        """实测日志里真的有 `09A-清心-…` / `A01-清水玉-…` 这种命名。"""
+        _write_log(self.log_path, [
+            ("12:10:00", "09A-清心-层岩巨渊-32朵.json", False),
+            ("12:20:00", "A01-清水玉-沉玉谷上谷-水面鼋背-6个.json", False),
+        ])
+
+        events = gather_cooldown.parse_day(self.log_path)
+
+        self.assertEqual([event["material"] for event in events], ["清心", "清水玉"])
+
+    def test_unparsable_name_falls_back_to_the_group_index(self):
+        _write_log(self.log_path, [("12:30:00", "1灵濛山.json", False)])
+
+        with patch.object(gather_cooldown, "route_material_index",
+                          return_value={"1灵濛山.json": "清水玉"}):
+            events = gather_cooldown.parse_day(self.log_path)
+
+        self.assertEqual(events[0]["material"], "清水玉")
+        self.assertEqual(events[0]["route"], "1灵濛山.json")
 
 
 class FilterTests(unittest.TestCase):

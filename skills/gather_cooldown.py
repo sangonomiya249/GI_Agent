@@ -38,11 +38,13 @@ import re
 import config
 
 # 路线名：`01-霜仙花-彩冰镇左上-3个.json`
-_ROUTE_MATERIAL_RE = re.compile(r"^(?:\d+[-_])?([^-_]+)[-_]")
-# 日志行：→ 脚本执行结束: "01-霜仙花-彩冰镇左上-3个.json", 耗时: ...
-_ROUTE_DONE_RE = re.compile(
-    r'脚本执行结束:\s*"(\d+)-([^-"]+)-[^"]*\.json"'
+# ⚠️ 前缀不止是纯数字：实测还有 `09A-清心-层岩巨渊-32朵.json`、`A01-清水玉-…`，
+#    原来只认 `\d+-`，这些路线的材料就整个读不出来（连带日志解析也漏掉）。
+_ROUTE_MATERIAL_RE = re.compile(
+    r"^\s*[A-Za-z]{0,2}\d+[A-Za-z]{0,2}\s*[-－—_]\s*([^\-－—_]+?)\s*[-－—_]"
 )
+# 日志行：→ 脚本执行结束: "01-霜仙花-彩冰镇左上-3个.json", 耗时: ...
+_ROUTE_DONE_RE = re.compile(r'脚本执行结束:\s*"([^"]+\.json)"')
 _FAILURE_RE = re.compile(r"未正常走完|任务执行失败")
 # 新路线开始（用来清掉"上一条路线的失败标记"，避免算到后面那条路上）
 _ROUTE_START_RE = re.compile(r"开始执行地图追踪任务")
@@ -135,9 +137,10 @@ def parse_day(path):
         found = _ROUTE_DONE_RE.search(text)
         if not found or current is None:
             continue
+        route_file = os.path.basename(found.group(1))
         events.append({
-            "material": found.group(2),
-            "route": os.path.basename(found.group(1)) and f"{found.group(1)}-{found.group(2)}",
+            "material": material_for_route(route_file),
+            "route": route_file,
             "at": datetime.datetime.combine(date, current),
             "failed": pending_failure,
         })
@@ -250,11 +253,7 @@ def route_totals():
     强制开一条）。玩家实测的坑：只跑了 1 条隔离带的路线，整种材料就被算成"采过了"、白等 48 小时
     （万相石 1/16、晶化骨髓 1/6、琉鳞石 1/6、星螺 1/5）。所以必须拿"跑了几条 / 一共几条"来判。
     """
-    candidates = (
-        getattr(config, "BGI_MAP_CONFIG", ""),
-        getattr(config, "BGI_MINE_CONFIG", ""),
-        getattr(config, "BGI_COOK_CONFIG", ""),
-    )
+    candidates = _collect_group_paths()
     key = tuple(
         (path, (os.path.getmtime(path) if os.path.isfile(path) else None))
         for path in candidates
@@ -459,33 +458,125 @@ _NOT_MATERIALS = {
     "璃月", "蒙德", "稻妻", "须弥", "枫丹", "纳塔", "挪德卡莱", "至冬", "坎瑞亚",
     "地方特产", "矿物", "食材与炼金", "锄地专区", "敌人与魔物",
 }
+# 目录里"分组/变体"标签，不是材料名 —— 实测玩家脚本组里到处都是这种层级：
+#   地方特产\蒙德\慕风蘑菇\无草神@Tool_tingsu        → 材料是「慕风蘑菇」，不是「无草神」
+#   地方特产\须弥\沙脂蛹\1. 高成功率路线            → 材料是「沙脂蛹」，不是那条路线名
+#   地方特产\璃月\清水玉\清水玉@…\A组鼋背           → 材料是「清水玉」
+#   地方特产\璃月\夜泊石\夜泊石地下@烤鱼            → 归到「夜泊石」（同一材料的地下路线）
+_LABEL_WORDS = re.compile(r"路线|地下|补充|收集|草神|未修正|低效|高效|鼋背|静态|动态|\d")
+# 路线作者写错的材料名 → 游戏里的正式名（本地百科字典核对过：
+# 字典里只有「蒲公英籽」「珊瑚真珠」，没有「蒲公英」「珊瑚珍珠」）
+_MATERIAL_ALIASES = {
+    "蒲公英": "蒲公英籽",
+    "珊瑚珍珠": "珊瑚真珠",
+}
 
 
 def _looks_like_material(name):
     name = str(name or "").strip()
     if not name or name in _NOT_MATERIALS:
         return False
+    if _LABEL_WORDS.search(name):        # 变体标签（无草神 / 1. 高成功率路线 / A组鼋背…）
+        return False
     return bool(_MATERIAL_NAME_RE.match(name))
 
 
-def material_from_project(project):
-    """从脚本组的一条路线里抠出材料名。
+def _canonical_material(name):
+    name = str(name or "").strip()
+    return _MATERIAL_ALIASES.get(name, name)
 
-    两个来源，先准后糙：
-      1. `folderName`（最准）：`地方特产\\挪德卡莱\\便携轴承` / `地方特产\\蒙德\\空羽蛾\\空羽蛾@ddaodan`
-         / `矿物\\虹滴晶` —— 取**最后一段**并去掉 `@作者` 后缀（实测这几种形态都存在）；
-      2. `name`（兜底）：`01-霜仙花-彩冰镇左上-3个.json` → 第二段。
+
+def _material_from_route_name(route_name):
+    """从路线**文件名**里读材料：`01-慕风蘑菇-晨曦酒庄-7个.json` → 慕风蘑菇。
+
+    文件名是最可靠的来源（约定就是 `NN-材料名-…`），所以**优先于目录**。
+    实测：慕风蘑菇/沙脂蛹 这类路线放在 `…\\材料\\无草神@作者` 这种多级目录下，
+    只看目录最后一段会读出「无草神」。
     """
-    project = project or {}
-    folder = str(project.get("folderName") or "").replace("/", "\\")
-    parts = [part for part in folder.split("\\") if part]
-    if parts:
-        tail = parts[-1].split("@")[0].strip()
-        if tail:
-            return tail
+    match = _ROUTE_MATERIAL_RE.match(str(route_name or ""))
+    if not match:
+        return ""
+    candidate = _canonical_material(match.group(1))
+    return candidate if _looks_like_material(candidate) else ""
 
-    match = _ROUTE_MATERIAL_RE.match(str(project.get("name") or ""))
-    return match.group(1) if match else ""
+
+def _material_from_folder(folder):
+    """从 `folderName` 由深到浅找"像材料的那一段"（跳过作者后缀与分组/变体标签）。"""
+    parts = [part for part in str(folder or "").replace("/", "\\").split("\\") if part]
+    for part in reversed(parts):
+        candidate = _canonical_material(part.split("@")[0])
+        if not candidate or not _looks_like_material(candidate):
+            continue
+        return candidate
+    return ""
+
+
+def material_from_project(project):
+    """从脚本组的一条路线里抠出材料名（先文件名、再目录，见上面两个函数的注释）。"""
+    project = project or {}
+    return (
+        _material_from_route_name(project.get("name"))
+        or _material_from_folder(project.get("folderName"))
+    )
+
+
+# 路线文件名 → 材料名（由"采集类目"的脚本组现算，按组文件 mtime 缓存）
+_ROUTE_INDEX = {}
+_ROUTE_INDEX_KEY = {"key": None}
+
+
+def _collect_group_paths():
+    return (
+        getattr(config, "BGI_MAP_CONFIG", ""),
+        getattr(config, "BGI_MINE_CONFIG", ""),
+        getattr(config, "BGI_COOK_CONFIG", ""),
+    )
+
+
+def route_material_index():
+    """{路线文件名: 材料名}（地图素材 / 矿物 / 食材与炼金三个组）。
+
+    为什么需要它：日志里只有一条路线的**文件名**，而有些路线的文件名不带材料
+    （`1灵濛山.json`、`3药蝶谷.json`）或前缀不是纯数字（`09A-清心-…`）——
+    这时就得回查脚本组，看这个文件挂在哪个材料目录下。
+    """
+    candidates = _collect_group_paths()
+    key = tuple(
+        (path, (os.path.getmtime(path) if os.path.isfile(path) else None))
+        for path in candidates
+    )
+    if _ROUTE_INDEX_KEY.get("key") == key:
+        return _ROUTE_INDEX
+
+    try:
+        from skills import route_group
+    except Exception:        # noqa: BLE001
+        return _ROUTE_INDEX
+
+    index = {}
+    for path in candidates:
+        if not path or not os.path.isfile(path):
+            continue
+        group = route_group.load_group(path) or {}
+        for project in group.get("projects") or []:
+            name = os.path.basename(str(project.get("name") or ""))
+            material = material_from_project(project)
+            if name and material:
+                index.setdefault(name, material)
+
+    _ROUTE_INDEX.clear()
+    _ROUTE_INDEX.update(index)
+    _ROUTE_INDEX_KEY["key"] = key
+    return _ROUTE_INDEX
+
+
+def material_for_route(route_name):
+    """给一个路线文件名，猜出它属于哪种材料（先文件名、再回查脚本组；都没有给空串）。"""
+    name = os.path.basename(str(route_name or ""))
+    material = _material_from_route_name(name)
+    if material:
+        return material
+    return route_material_index().get(name, "")
 
 
 def route_material_vocabulary():
@@ -494,26 +585,7 @@ def route_material_vocabulary():
     只统计"采集类目"的三个组（地图素材 / 矿物 / 食材与炼金）：敌人与魔物那些组的
     `folderName` 末尾是魔物名（巡陆艇、蕈兽…），它们不是 48 小时刷新的特产。
     """
-    try:
-        from skills import route_group
-    except Exception:        # noqa: BLE001
-        return set()
-
-    names = set()
-    candidates = (
-        getattr(config, "BGI_MAP_CONFIG", ""),
-        getattr(config, "BGI_MINE_CONFIG", ""),
-        getattr(config, "BGI_COOK_CONFIG", ""),
-    )
-    for path in candidates:
-        if not path or not os.path.isfile(path):
-            continue
-        group = route_group.load_group(path) or {}
-        for project in group.get("projects") or []:
-            material = material_from_project(project)
-            if material and _looks_like_material(material):
-                names.add(material)
-    return names
+    return set(route_material_index().values())
 
 
 def _specialty_index():
