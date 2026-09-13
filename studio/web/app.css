@@ -859,3 +859,10 @@ kbd {
   .run-shortcuts .btn { flex: 1; }
   .run-sidebar { display: flex; }
 }
+
+/* ---------------- 采集冷却页 ---------------- */
+/* 标签里的图标（"冷却中"的那个小时钟）跟着字号走，别比文字还高 */
+.tag .status-icon { margin-right: 2px; }
+.tag .status-icon svg { width: 12px; height: 12px; }
+#cooldown-table td { vertical-align: middle; }
+#cooldown-table .row-actions { gap: 6px; }

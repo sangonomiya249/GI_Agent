@@ -23,6 +23,7 @@
       <div class="nav-label">工作台</div>
       <button class="nav-item active" data-page="run"><span class="ico" data-icon="play"></span>运行 <em class="badge hidden" id="nav-badge-run">1</em></button>
       <button class="nav-item" data-page="dashboard"><span class="ico" data-icon="layout"></span>概览</button>
+      <button class="nav-item" data-page="cooldown"><span class="ico" data-icon="leaf"></span>采集冷却</button>
       <button class="nav-item" data-page="routes"><span class="ico" data-icon="map"></span>任务与路线</button>
       <button class="nav-item" data-page="channels"><span class="ico" data-icon="plug"></span>远程通道</button>
       <div class="nav-label nav-label-secondary">系统</div>
@@ -152,6 +153,31 @@
               </div>
             </div>
           </aside>
+        </div>
+      </div>
+
+      <!-- ---------- 采集冷却 ---------- -->
+      <div class="page hidden" data-page="cooldown">
+        <div class="cards" id="cooldown-cards"></div>
+        <div class="card">
+          <div class="card-head">
+            <h2>地区特产冷却</h2>
+            <div class="row-actions tight">
+              <input class="input sm" id="cooldown-search" placeholder="搜材料名…" />
+              <label class="switch"><input type="checkbox" id="cooldown-only-cooling" /><span>只看冷却中</span></label>
+              <button class="btn ghost sm" id="btn-cooldown-reload">刷新</button>
+            </div>
+          </div>
+          <div class="muted" id="cooldown-hint">读取中…</div>
+          <div class="table-wrap"><table class="table" id="cooldown-table"></table></div>
+          <div class="hint">
+            数据来自 <b>BetterGI 自己的日志</b>（每条路线跑完都会记一笔），所以你在 BGI 里手动跑的也算。
+            「还要等」是按 <code>GATHER_COOLDOWN_HOURS</code>（默认 48 小时）算的；
+            <b>只跑了零星几条路线不算采完</b>（门槛 <code>GATHER_COOLDOWN_MIN_ROUTE_PERCENT</code>，默认 80%），
+            这种会标成「部分采集」并照常排期。<br />
+            自己<b>在游戏里采过</b>（日志里没有的）：点那行的「记为刚采过」即可，等价于
+            <code>python -m skills.gather_cooldown --manual 霜仙花</code>；点「清除」把记录删掉。
+          </div>
         </div>
       </div>
 

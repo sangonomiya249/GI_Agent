@@ -223,14 +223,17 @@ def manual_collected(material):
         return None
 
 
-def last_collected(material, days=None):
-    """某种材料最近一次**成功**采集的时间；没有记录返回 None。"""
+def last_collected(material, days=None, events=None):
+    """某种材料最近一次**成功**采集的时间；没有记录返回 None。
+
+    `events` 可以直接传进来复用（见 `session_routes` 的说明）。
+    """
     material = str(material or "").strip()
     if not material:
         return None
 
     latest = None
-    for event in scan_events(days):
+    for event in (scan_events(days) if events is None else events):
         if event["failed"] or event["material"] != material:
             continue
         if latest is None or event["at"] > latest:
@@ -282,13 +285,17 @@ def route_totals():
     return _ROUTE_TOTALS
 
 
-def session_routes(material, latest, window_hours=3):
-    """上一次"采集那一趟"里，这种材料成功跑完的**不同路线**数（去重）。"""
+def session_routes(material, latest, window_hours=3, events=None):
+    """上一次"采集那一趟"里，这种材料成功跑完的**不同路线**数（去重）。
+
+    `events` 可以直接传进来复用（Studio 的采集冷却页要一次算几十种材料，
+    每个都重扫一遍日志会慢几十倍 —— 见 `overview()`）。
+    """
     if latest is None:
         return 0
     window = latest - datetime.timedelta(hours=window_hours)
     routes = set()
-    for event in scan_events():
+    for event in (scan_events() if events is None else events):
         if event["failed"] or event["material"] != material:
             continue
         if window <= event["at"] <= latest:
@@ -316,7 +323,7 @@ def band_enabled():
     return bool(getattr(config, "BGI_FORCE_ENABLE_BAND", True))
 
 
-def status(material, now=None):
+def status(material, now=None, events=None):
     """单种材料的冷却状态。
 
     返回 {material, last_at, hours_ago, hours_left, cooling, known, total_routes, ran_routes,
@@ -327,10 +334,12 @@ def status(material, now=None):
                        或中途停了）→ **不算采完**，可以继续采。
                        只在隔离带开着时才会判（关掉隔离带就是"正常冷却"）。
       · manual=True  → 这次记录来自**手动登记**（游戏里自己采的），不算"部分采集"。
+
+    `events` 可以直接传进来复用（见 `overview()`）。
     """
     now = now or datetime.datetime.now()
     material = str(material or "").strip()
-    last = last_collected(material)
+    last = last_collected(material, events=events)
     result = {
         "material": material,
         "last_at": None,
@@ -349,7 +358,7 @@ def status(material, now=None):
     elapsed = (now - last).total_seconds() / 3600
     left = cooldown_hours() - elapsed
     total = result["total_routes"]
-    ran = session_routes(material, last)
+    ran = session_routes(material, last, events=events)
     # 🌟 手动登记（`--manual 霜仙花`）= 玩家明确说"这种材料我刚采过了"，
     #    所以**不受"跑了几条路线"的比例规则约束** —— 那条规则是给**日志里的隔离带副作用**
     #    擦屁股的（见 band_enabled()）。不特判的话，手动登记那次日志里当然没有路线记录，
@@ -377,6 +386,51 @@ def status(material, now=None):
         "cooling": left > 0 and not partial,
     })
     return result
+
+
+def overview(now=None):
+    """一次算出**全部材料**的冷却状态（Studio 的「采集冷却」页 / CLI 都用它）。
+
+    为什么要单独一个函数：`status()` 内部会扫日志，几十种材料各扫一遍就是几十倍的
+    重复 IO（实测 62 种材料在地图素材这种大组上要好几秒）。这里把日志解析一次，
+    再逐个算状态。
+
+    返回 {now, hours, min_route_percent, band_enabled, scanned_days, events,
+          summary:{total, cooling, ready, partial, manual}, materials:[status...]}
+    排序：**冷却中的在前**（按"快刷新了"排），其余按最近采过的时间倒序、再按名字。
+    """
+    now = now or datetime.datetime.now()
+    events = scan_events()
+    totals = route_totals()
+    manual = load_manual()
+
+    names = set(route_material_vocabulary()) | set(manual)
+    # ⚠️ 故意**不**把日志里出现的每一种"材料"都列出来：日志里的路线还包括敌人与魔物组的
+    #    （巡陆艇、蕈兽…），它们不是 48 小时刷新的特产，混进来会让这页变成一锅粥。
+    #    这也和 `cooling_materials()`（喂给大模型的那份）保持一致。
+
+    rows = [status(name, now=now, events=events) for name in sorted(names)]
+    rows.sort(key=lambda row: (not row["cooling"], row["hours_left"], -(row["total_routes"] or 0), row["material"]))
+
+    summary = {
+        "total": len(rows),
+        "cooling": sum(1 for row in rows if row["cooling"]),
+        "ready": sum(1 for row in rows if not row["cooling"]),
+        "partial": sum(1 for row in rows if row["partial"]),
+        "manual": sum(1 for row in rows if row["manual"]),
+        "with_routes": sum(1 for row in rows if row["total_routes"]),
+    }
+    return {
+        "now": now,
+        "hours": cooldown_hours(),
+        "min_route_percent": int(round(_minimum_ratio() * 100)),
+        "band_enabled": band_enabled(),
+        "scanned_days": len(log_paths()),
+        "events": len(events),
+        "summary": summary,
+        "materials": rows,
+        "totals": totals,
+    }
 
 
 def human_hours(hours):

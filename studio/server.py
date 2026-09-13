@@ -17,6 +17,8 @@ API 一览（前端 studio/web/app.js 消费）：
     GET  /api/doctor             环境体检
     GET  /api/guide              使用说明（实时状态）
     GET  /api/routes             脚本组 / 类目路线概览
+    GET  /api/cooldown           地区特产 48 小时冷却一览（哪个还在冷却、还要等多久）
+    POST /api/cooldown/manual    登记 / 清除某种材料的"我刚采过"
     GET  /api/transactions       可回滚事务
     POST /api/rollback           回滚
     GET  /api/bettergi-log       读 BetterGI 日志尾部
@@ -24,6 +26,7 @@ API 一览（前端 studio/web/app.js 消费）：
     POST /api/shutdown           停掉 Agent（与通道）并退出 Studio
 """
 
+import datetime
 import os
 import sys
 import threading
@@ -538,6 +541,78 @@ def create_app(runner=None, env_path=None, channels=None):
                 }
             )
         return jsonify({"ok": True, "groups": groups, "categories": categories})
+
+    @app.get("/api/cooldown")
+    def api_cooldown():
+        """地区特产 48 小时冷却一览（Studio 的「采集冷却」页）。
+
+        数据来自 `skills.gather_cooldown.overview()`：一次算完全部材料（内部只解析一遍日志）。
+        """
+        from skills import gather_cooldown
+
+        try:
+            data = gather_cooldown.overview()
+        except Exception as exc:            # noqa: BLE001 —— 页面不该因为日志读不到就 500
+            return _json_error(f"读取采集冷却失败：{type(exc).__name__} {exc}", 500)
+
+        rows = []
+        for result in data["materials"]:
+            last = result.get("last_at")
+            rows.append({
+                "material": result["material"],
+                "cooling": bool(result["cooling"]),
+                "known": bool(result["known"]),
+                "partial": bool(result["partial"]),
+                "manual": bool(result["manual"]),
+                "hours_left": round(result["hours_left"], 2),
+                "hours_left_text": (
+                    gather_cooldown.human_hours(result["hours_left"]) if result["cooling"] else ""
+                ),
+                "hours_ago": None if result["hours_ago"] is None else round(result["hours_ago"], 2),
+                "last_at": last.strftime("%m-%d %H:%M") if isinstance(last, datetime.datetime) else "",
+                "last_ts": last.timestamp() if isinstance(last, datetime.datetime) else None,
+                "total_routes": result["total_routes"],
+                "ran_routes": result["ran_routes"],
+                "describe": gather_cooldown.describe(result),
+            })
+
+        return jsonify({
+            "ok": True,
+            "hours": data["hours"],
+            "min_route_percent": data["min_route_percent"],
+            "band_enabled": data["band_enabled"],
+            "scanned_days": data["scanned_days"],
+            "events": data["events"],
+            "generated_at": data["now"].strftime("%H:%M:%S"),
+            "summary": data["summary"],
+            "materials": rows,
+        })
+
+    @app.post("/api/cooldown/manual")
+    def api_cooldown_manual():
+        """登记 / 清除某种材料的"我刚在游戏里采过"（等价于 CLI 的 --manual / --clear）。
+
+        请求体：{"material": "霜仙花", "action": "mark" | "clear"}
+        """
+        from skills import gather_cooldown
+
+        payload = request.get_json(silent=True) or {}
+        material = str(payload.get("material") or "").strip()
+        action = str(payload.get("action") or "mark").strip().lower()
+        if not material:
+            return _json_error("material 不能为空")
+        if action not in ("mark", "clear"):
+            return _json_error("action 只能是 mark 或 clear")
+
+        if action == "mark":
+            ok = gather_cooldown.mark_manual(material)
+            message = f"已登记「{material}」为刚采过（48 小时内不再排它）"
+        else:
+            ok = gather_cooldown.clear_manual(material)
+            message = f"已清除「{material}」的冷却记录"
+        if not ok:
+            return _json_error("写入 memory/gather_cooldown_manual.json 失败（磁盘权限？）", 500)
+        return jsonify({"ok": True, "message": message, "action": action, "material": material})
 
     def _enabled_task_names():
         from skills import bgi_controller

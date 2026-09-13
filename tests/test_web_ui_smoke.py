@@ -50,6 +50,20 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertIn("✅ 内嵌控制台容器存在", result.stdout)
         self.assertNotIn("❌", result.stdout)
 
+    def test_app_js_renders_the_cooldown_page(self):
+        """「采集冷却」页：切过去要能真渲染出汇总卡与表格（含"还要等多久"和操作按钮）。"""
+        result = self._run(str(HARNESS))
+
+        self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
+        for line in (
+            "✅ 采集冷却：汇总卡渲染出来了",
+            "✅ 采集冷却：冷却中的材料带剩余时间",
+            "✅ 采集冷却：部分采集标注出来了",
+            "✅ 采集冷却：没有记录的按可以采显示",
+            "✅ 采集冷却：每行都有登记/清除按钮",
+        ):
+            self.assertIn(line, result.stdout)
+
     def test_every_element_the_app_looks_up_exists_or_is_created_by_js(self):
         """app.js 里 $('#id') 用到的 id 必须能在 index.html 找到，或者由 JS 自己创建。"""
         html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
@@ -88,6 +102,21 @@ class WebUiSmokeTests(unittest.TestCase):
         for element_id in ("chan-cards", "chan-hint", "dash-channels", "dash-chan-hint"):
             self.assertIn(f'id="{element_id}"', html, element_id)
         self.assertIn('data-page="channels"', html)
+
+    def test_cooldown_page_elements_exist(self):
+        """「采集冷却」页的骨架 + 接口调用都要在（少一个 id，点进去就是白屏/报错）。"""
+        html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
+        js = APP_JS.read_text(encoding="utf-8")
+
+        self.assertIn('data-page="cooldown"', html)
+        for element_id in (
+            "cooldown-cards", "cooldown-table", "cooldown-hint",
+            "cooldown-search", "cooldown-only-cooling", "btn-cooldown-reload",
+        ):
+            self.assertIn(f'id="{element_id}"', html, element_id)
+        self.assertIn("/api/cooldown", js)
+        self.assertIn("cooldown: [", js)          # PAGE_META 里有这一页，标题栏才对
+        self.assertIn("loadCooldown", js)
 
 
 if __name__ == "__main__":

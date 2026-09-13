@@ -11,6 +11,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 import config
+from skills import gather_cooldown
 from studio import agent_runner, channel_runner, logs, server
 
 
@@ -636,6 +637,98 @@ class ApiTests(unittest.TestCase):
         categories = {row["action"]: row for row in data["categories"]}
         self.assertEqual(categories["hoe"]["count"], 1)
         self.assertEqual(categories["hoe"]["label"], "锄大地")
+
+    # ---------- 采集冷却页（Studio「采集冷却」） ----------
+
+    def _write_map_group(self, projects):
+        group_dir = self.root / "ScriptGroup"
+        group_dir.mkdir(exist_ok=True)
+        path = group_dir / "地图素材.json"
+        path.write_text(
+            json.dumps({"name": "地图素材", "projects": projects}, ensure_ascii=False),
+            encoding="utf-8",
+        )
+        return group_dir, path
+
+    def _cooldown_env(self):
+        """把采集冷却相关的路径都指到临时目录（别读开发机真实的日志/组）。"""
+        manual = self.root / "gather_cooldown_manual.json"
+        log_dir = self.root / "bgi-log"
+        log_dir.mkdir(exist_ok=True)
+        patches = [
+            patch.object(config, "BGI_LOG_DIR", str(log_dir)),
+            patch.object(gather_cooldown, "manual_state_path", return_value=str(manual)),
+            patch.object(gather_cooldown, "_ROUTE_TOTALS_CACHE_KEY", {"key": None}),
+            patch.object(gather_cooldown, "_ROUTE_INDEX_KEY", {"key": None}),
+        ]
+        for item in patches:
+            item.start()
+            self.addCleanup(item.stop)
+
+    def test_cooldown_endpoint_lists_materials_with_status(self):
+        group_dir, group_path = self._write_map_group([
+            {"name": "01-霜仙花-彩冰镇左上-3个.json",
+             "folderName": "地方特产\\挪德卡莱\\霜仙花\\无草神@某人", "type": "Pathing"},
+            {"name": "01-慕风蘑菇-晨曦酒庄-7个.json",
+             "folderName": "地方特产\\蒙德\\慕风蘑菇", "type": "Pathing"},
+        ])
+        self._cooldown_env()
+
+        with patch.object(config, "BGI_SCRIPT_GROUP_DIR", str(group_dir)), patch.object(
+            config, "BGI_MAP_CONFIG", str(group_path)
+        ), patch.object(config, "BGI_MINE_CONFIG", ""), patch.object(config, "BGI_COOK_CONFIG", ""):
+            data = self.client.get("/api/cooldown").get_json()
+            marked = self.client.post(
+                "/api/cooldown/manual", json={"material": "霜仙花", "action": "mark"}
+            ).get_json()
+            after = self.client.get("/api/cooldown").get_json()
+            cleared = self.client.post(
+                "/api/cooldown/manual", json={"material": "霜仙花", "action": "clear"}
+            ).get_json()
+
+        self.assertTrue(data["ok"])
+        self.assertEqual(data["hours"], 48)
+        self.assertIn("summary", data)
+        rows = {row["material"]: row for row in data["materials"]}
+        # 材料名要按"先文件名"的规则读出来（慕风蘑菇那条以前会被读成目录末段）
+        self.assertIn("霜仙花", rows)
+        self.assertIn("慕风蘑菇", rows)
+        self.assertIn("describe", rows["霜仙花"])
+
+        self.assertTrue(marked["ok"])
+        cooling = {row["material"]: row for row in after["materials"]}
+        self.assertTrue(cooling["霜仙花"]["cooling"])
+        self.assertTrue(cooling["霜仙花"]["manual"])
+        self.assertGreater(cooling["霜仙花"]["hours_left"], 47)      # 刚登记 ≈ 满 48 小时
+        self.assertIn("还没刷新", cooling["霜仙花"]["describe"])
+
+        self.assertTrue(cleared["ok"])
+        self.assertFalse(
+            next(row for row in self.client.get("/api/cooldown").get_json()["materials"]
+                 if row["material"] == "霜仙花")["cooling"]
+        )
+
+    def test_cooldown_manual_validates_input(self):
+        self._cooldown_env()
+
+        missing = self.client.post("/api/cooldown/manual", json={})
+        bad_action = self.client.post("/api/cooldown/manual", json={"material": "x", "action": "boom"})
+
+        self.assertEqual(missing.status_code, 400)
+        self.assertFalse(missing.get_json()["ok"])
+        self.assertEqual(bad_action.status_code, 400)
+
+    def test_cooldown_endpoint_survives_a_broken_log_dir(self):
+        """日志目录读不到也不能 500：页面要能打开并说明情况。"""
+        self._cooldown_env()
+
+        with patch.object(
+            gather_cooldown, "overview", side_effect=OSError("磁盘炸了")
+        ):
+            response = self.client.get("/api/cooldown")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("读取采集冷却失败", response.get_json()["error"])
 
 
 if __name__ == "__main__":

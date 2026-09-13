@@ -19,6 +19,9 @@ const state = {
   channels: [],          // 远程通道摘要（来自 /api/state）
   chanSeq: {},           // 各通道日志游标 { qq: 12, feishu: 0 }
   chanLines: {},         // 已渲染的行数（只用于控制 DOM 体积）
+  cooldown: null,        // 采集冷却（/api/cooldown 的最近一次结果）
+  cooldownSearch: "",    //   页面上的筛选条件
+  cooldownOnlyCooling: false,
 };
 
 const ICONS = {
@@ -46,6 +49,8 @@ const ICONS = {
   restore: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="4" y="8" width="11" height="11" rx="2"/><path d="M9 8V6a2 2 0 0 1 2-2h7a2 2 0 0 1 2 2v7a2 2 0 0 1-2 2h-2"/></svg>',
   spark: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 1.7 5.3L19 10l-5.3 1.7L12 17l-1.7-5.3L5 10l5.3-1.7L12 3Z"/></svg>',
   plug: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M9 3v6M15 3v6M6 9h12v3a6 6 0 0 1-12 0V9ZM12 18v3"/></svg>',
+  leaf: '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 4c0 8-5 12-11 12H5c0-6 4-10 10-10 2 0 3-.7 5-2Z"/><path d="M5 20c1-4 4-7 8-9"/></svg>',
+  clock: '<svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="8"/><path d="M12 8v4.5l3 2"/></svg>',
 };
 
 function renderIcons() {
@@ -58,6 +63,7 @@ function renderIcons() {
 const PAGE_META = {
   dashboard: ["概览", "一眼看清 Agent、BetterGI 与今天的路线状态"],
   run: ["运行", "启动 Agent、审批方案、看实时日志"],
+  cooldown: ["采集冷却", "地区特产 48 小时刷新：谁还在冷却、还要等多久"],
   routes: ["任务与路线", "调度器脚本组、战斗策略与各类目路线"],
   channels: ["远程通道", "QQ 机器人 / 飞书服务端：内嵌启停与日志，可随 Agent 自动启动"],
   config: ["配置", "图形化编辑 .env（保留注释，自动备份）"],
@@ -145,6 +151,7 @@ function switchPage(page) {
   if (page === "guide") loadGuide();
   if (page === "logs") loadBgiLog();
   if (page === "routes") loadRoutes();
+  if (page === "cooldown") loadCooldown();
   if (page === "dashboard") loadBgiLog(true);
   if (page === "channels") pollChannels();
 }
@@ -563,6 +570,134 @@ async function loadDoctor(force = true) {
   $("#doctor-summary").textContent = `${data.summary.errors} 个错误 · ${data.summary.warns} 个告警`;
 }
 
+/* ---------------- 采集冷却 ---------------- */
+/** 把小时数说成人话（1 天 23 小时 / 40 分钟）。后端也会给一份，这里兜住手动改数据的情况。 */
+function hoursText(hours) {
+  if (hours === null || hours === undefined) return "";
+  if (hours < 1) return `${Math.round(hours * 60)} 分钟`;
+  const whole = Math.floor(hours);
+  const minutes = Math.round((hours - whole) * 60);
+  if (whole >= 24) {
+    const days = Math.floor(whole / 24), rest = whole % 24;
+    return rest ? `${days} 天 ${rest} 小时` : `${days} 天`;
+  }
+  return minutes ? `${whole} 小时 ${minutes} 分` : `${whole} 小时`;
+}
+
+function cooldownStatusTag(row) {
+  if (!row.known) return `<span class="tag ok">可以采</span><span class="tag dim">没有记录</span>`;
+  if (row.partial) return `<span class="tag ok">可以采</span><span class="tag warn">部分采集</span>`;
+  if (row.cooling) return `<span class="tag warn"><span class="status-icon">${ICONS.clock}</span>冷却中 · 还要 ${escapeHtml(hoursText(row.hours_left))}</span>`;
+  return `<span class="tag ok">可以采</span>`;
+}
+
+function cooldownRows(rows) {
+  const keyword = (state.cooldownSearch || "").trim();
+  const onlyCooling = Boolean(state.cooldownOnlyCooling);
+  const filtered = rows.filter((row) => {
+    if (onlyCooling && !row.cooling) return false;
+    return !keyword || row.material.includes(keyword);
+  });
+  if (!filtered.length) {
+    return `<tr><td colspan="5"><div class="empty">没有匹配的材料${onlyCooling ? "（试试取消「只看冷却中」）" : ""}</div></td></tr>`;
+  }
+  return filtered.map((row) => {
+    const routes = row.total_routes
+      ? `${row.ran_routes}/${row.total_routes} 条`
+      : `<span class="muted">组里没有路线</span>`;
+    const source = row.manual ? `<span class="tag dim">手动登记</span>` : "";
+    const last = row.last_at
+      ? `${escapeHtml(row.last_at)}${row.hours_ago !== null ? `<div class="muted">${escapeHtml(hoursText(row.hours_ago))}前</div>` : ""}`
+      : `<span class="muted">—</span>`;
+    return `<tr>
+      <td><b>${escapeHtml(row.material)}</b> ${source}</td>
+      <td>${cooldownStatusTag(row)}</td>
+      <td>${last}</td>
+      <td>${routes}</td>
+      <td><div class="row-actions tight">
+        <button class="btn ghost sm" data-cool-mark="${escapeHtml(row.material)}">记为刚采过</button>
+        <button class="btn ghost sm" data-cool-clear="${escapeHtml(row.material)}"${row.known ? "" : " disabled"}>清除</button>
+      </div></td>
+    </tr>`;
+  }).join("");
+}
+
+function renderCooldown(data) {
+  if (!data || !data.ok) {
+    $("#cooldown-hint").textContent = (data && data.error) || "读取失败";
+    $("#cooldown-table").innerHTML = "";
+    $("#cooldown-cards").innerHTML = "";
+    return;
+  }
+  state.cooldown = data;
+  const summary = data.summary || {};
+  $("#cooldown-cards").innerHTML = [
+    statCard({
+      label: "冷却中", value: `${summary.cooling || 0} 种`, tone: (summary.cooling ? "warn" : ""),
+      sub: `共 ${summary.total || 0} 种材料 · 刷新时长 ${data.hours} 小时`, icon: "clock",
+    }),
+    statCard({
+      label: "可以采", value: `${summary.ready || 0} 种`, tone: "ok",
+      sub: `部分采集 ${summary.partial || 0} 种（不算采完，照常排期）`, icon: "leaf",
+    }),
+    statCard({
+      label: "手动登记", value: `${summary.manual || 0} 种`,
+      sub: "游戏里自己采过的，记一笔就进冷却", icon: "file",
+    }),
+    statCard({
+      label: "判定依据", value: data.band_enabled ? "按路线比例" : "正常冷却",
+      sub: `隔离带${data.band_enabled ? "开" : "关"} · 门槛 ${data.min_route_percent}% · 扫了 ${data.scanned_days} 天日志`,
+      icon: "pulse",
+    }),
+  ].join("");
+  $("#cooldown-table").innerHTML = `<thead><tr>
+      <th>材料</th><th>状态</th><th>上次采集</th><th>路线</th><th>操作</th>
+    </tr></thead><tbody>${cooldownRows(data.materials || [])}</tbody>`;
+  $("#cooldown-hint").textContent =
+    `${data.generated_at} 读取 · 日志事件 ${data.events} 条 · 点了「刷新」可以随时重算`;
+}
+
+async function loadCooldown() {
+  $("#cooldown-hint").textContent = "读取中…";
+  const data = await api("/api/cooldown");
+  renderCooldown(data);
+}
+
+async function cooldownManual(material, action) {
+  const data = await api("/api/cooldown/manual", { method: "POST", body: { material, action } });
+  if (!data.ok) { toast(data.error || "操作失败", "error"); return; }
+  toast(data.message || "已更新");
+  await loadCooldown();
+}
+
+function setupCooldownPage() {
+  const search = $("#cooldown-search");
+  const only = $("#cooldown-only-cooling");
+  if (search && search.addEventListener) {
+    search.addEventListener("input", () => {
+      state.cooldownSearch = search.value || "";
+      if (state.cooldown) renderCooldown(state.cooldown);
+    });
+  }
+  if (only && only.addEventListener) {
+    only.addEventListener("change", () => {
+      state.cooldownOnlyCooling = Boolean(only.checked);
+      if (state.cooldown) renderCooldown(state.cooldown);
+    });
+  }
+  const reload = $("#btn-cooldown-reload");
+  if (reload && reload.addEventListener) reload.addEventListener("click", () => loadCooldown());
+  const table = $("#cooldown-table");
+  if (table && table.addEventListener) {
+    table.addEventListener("click", (event) => {
+      const target = event.target && event.target.closest ? event.target.closest("[data-cool-mark], [data-cool-clear]") : null;
+      if (!target) return;
+      if (target.dataset.coolMark) cooldownManual(target.dataset.coolMark, "mark");
+      else if (target.dataset.coolClear) cooldownManual(target.dataset.coolClear, "clear");
+    });
+  }
+}
+
 /* ---------------- 任务与路线 ---------------- */
 async function loadRoutes() {
   const data = await api("/api/routes");
@@ -780,6 +915,8 @@ function bindEvents() {
     const item = event.target.closest(".nav-item");
     if (item) switchPage(item.dataset.page);
   });
+
+  setupCooldownPage();
 
   $("#btn-start").addEventListener("click", startAgent);
   $("#btn-stop").addEventListener("click", stopAgent);

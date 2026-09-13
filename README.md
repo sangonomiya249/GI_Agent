@@ -107,6 +107,8 @@ python -m skills.gather_cooldown --materials      # 脚本组里能采的材料�
 ```
 
 冷却时长、是否允许「强制采集」都在 Studio「配置」页（`GATHER_COOLDOWN_*`）。
+**想看谁在冷却、还要等多久**：Studio 左侧「🌿 采集冷却」页有一张表（还能在游戏里自己采过之后
+点一下「记为刚采过」）；命令行也可以 `python -m skills.gather_cooldown`。
 实现细节（怎么从日志判定、隔离带为什么会影响判定）见 [内部机制](docs/INTERNALS.md)。
 
 ---

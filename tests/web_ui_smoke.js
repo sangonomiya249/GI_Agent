@@ -82,6 +82,32 @@ const CHANNELS = {
   ],
 };
 
+const COOLDOWN = {
+  ok: true, hours: 48, min_route_percent: 80, band_enabled: true,
+  scanned_days: 3, events: 42, generated_at: "23:40:00",
+  summary: { total: 3, cooling: 1, ready: 2, partial: 1, manual: 1, with_routes: 3 },
+  materials: [
+    {
+      material: "霜仙花", cooling: true, known: true, partial: false, manual: false,
+      hours_left: 20.5, hours_left_text: "20 小时 30 分", hours_ago: 27.5,
+      last_at: "09-13 12:34", last_ts: 1789197240, total_routes: 7, ran_routes: 7,
+      describe: "⏳ 霜仙花：还没刷新，还要等约 20 小时 30 分",
+    },
+    {
+      material: "慕风蘑菇", cooling: false, known: true, partial: true, manual: false,
+      hours_left: 0, hours_left_text: "", hours_ago: 5.0,
+      last_at: "09-14 03:00", last_ts: 1789249200, total_routes: 17, ran_routes: 2,
+      describe: "✅ 慕风蘑菇：只采了 2/17 条路线，不算采完",
+    },
+    {
+      material: "沙脂蛹", cooling: false, known: false, partial: false, manual: false,
+      hours_left: 0, hours_left_text: "", hours_ago: null,
+      last_at: "", last_ts: null, total_routes: 10, ran_routes: 0,
+      describe: "✅ 沙脂蛹：没有采集记录（按已刷新处理，可以采）",
+    },
+  ],
+};
+
 const STATE = {
   ok: true, state: "stopped", pid: null, seq: 0, lines: [], partial: "",
   plan: { lines: ["⚔️ 体力目标：无"] }, project_root: "C:\\proj",
@@ -94,6 +120,7 @@ async function fakeFetch(url) {
   if (url.startsWith("/api/channels")) payload = CHANNELS;
   if (url.startsWith("/api/log")) payload = { ok: true, seq: 0, lines: [], partial: "" };
   if (url.startsWith("/api/config")) payload = { ok: true, groups: [] };
+  if (url.startsWith("/api/cooldown")) payload = COOLDOWN;
   return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
 }
 
@@ -117,13 +144,18 @@ sandbox.globalThis = sandbox;
 vm.createContext(sandbox);
 
 (async () => {
+  const settle = async (rounds = 4) => {
+    for (let index = 0; index < rounds; index += 1) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  };
   try {
     vm.runInContext(source, sandbox, { filename: "app.js" });
     // boot() 是异步的：让 API 的 microtask 跑完
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
-    await new Promise((resolve) => setImmediate(resolve));
+    await settle();
+    // 再切到「采集冷却」页，验证这条链路（/api/cooldown → 汇总卡 + 表格）也能渲染
+    sandbox.switchPage("cooldown");
+    await settle();
   } catch (exc) {
     console.error("❌ 运行 app.js 抛异常：", exc && exc.stack ? exc.stack : exc);
     process.exit(2);
@@ -131,6 +163,8 @@ vm.createContext(sandbox);
 
   const channelsPage = captured["chan-cards"] || "";
   const dash = captured["dash-channels"] || "";
+  const coolCards = captured["cooldown-cards"] || "";
+  const coolTable = captured["cooldown-table"] || "";
 
   const checks = [
     ["通道卡片渲染出来了", channelsPage.includes('data-chan="qq"')],
@@ -140,6 +174,12 @@ vm.createContext(sandbox);
     ["未配置通道写明缺哪一项", channelsPage.includes("FEISHU_APP_ID")],
     ["自动启动勾选框", channelsPage.includes("data-chan-auto=\"qq\"")],
     ["概览摘要卡也有内容", dash.includes("QQ 机器人")],
+    ["采集冷却：汇总卡渲染出来了", coolCards.includes("冷却中") && coolCards.includes("48 小时")],
+    ["采集冷却：冷却中的材料带剩余时间", coolTable.includes("霜仙花") && coolTable.includes("还要 20 小时 30 分")],
+    ["采集冷却：部分采集标注出来了", coolTable.includes("慕风蘑菇") && coolTable.includes("部分采集")],
+    ["采集冷却：没有记录的按可以采显示", coolTable.includes("沙脂蛹") && coolTable.includes("可以采")],
+    ["采集冷却：每行都有登记/清除按钮",
+      coolTable.includes('data-cool-mark="霜仙花"') && coolTable.includes('data-cool-clear="霜仙花"')],
   ];
 
   let failed = 0;
@@ -148,5 +188,6 @@ vm.createContext(sandbox);
     if (!ok) failed += 1;
   }
   if (!channelsPage) console.log("（chan-cards 是空的 —— 说明渲染没发生）");
+  if (!coolTable) console.log("（cooldown-table 是空的 —— 采集冷却页没渲染出来）");
   process.exit(failed ? 1 : 0);
 })();
