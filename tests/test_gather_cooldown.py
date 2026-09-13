@@ -1,0 +1,397 @@
+"""采集物 48 小时冷却检测（skills/gather_cooldown.py + 执行前的拦截）的测试。
+
+玩家实测的需求：说「去采集霜仙花」时不能无脑跑 —— 地区特产 48 小时才刷新，
+还在冷却里就该提示"还没刷新"，而不是白跑一趟。
+
+数据来源是真实格式：BetterGI 日志里每条路线跑完会打
+    → 脚本执行结束: "01-霜仙花-彩冰镇左上-3个.json", 耗时: 0分24.5秒
+"""
+
+import datetime
+import json
+import os
+import tempfile
+import unittest
+from unittest.mock import patch
+
+import config
+from skills import bgi_controller, gather_cooldown
+
+
+def _write_log(path, entries):
+    """按 BGI 的真实格式写一份日志：时间戳一行、正文一行。
+
+    entries: [(时间 "HH:MM:SS", 路线名, 是否失败)]
+    """
+    lines = []
+    for moment, route, failed in entries:
+        lines.append(f"[{moment}.123] [INF] [Primary:S1:P1:T1] BetterGenshinImpact.Service.ScriptService")
+        if failed:
+            lines.append("[{}] [WRN] [Primary:S1:P1:T1] BetterGenshinImpact.GameTask.Common.TaskControl".format(moment))
+            lines.append("此追踪脚本未正常走完！")
+        lines.append(f'→ 脚本执行结束: "{route}", 耗时: 0分24.5秒')
+        lines.append("------------------------------")
+    open(path, "w", encoding="utf-8").write("\n".join(lines) + "\n")
+
+
+class LogParsingTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.log_dir = self.tmp.name
+        today = datetime.date.today().strftime("%Y%m%d")
+        self.log_path = os.path.join(self.log_dir, f"better-genshin-impact{today}.log")
+        patcher = patch.object(config, "BGI_LOG_DIR", self.log_dir)
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_route_name_gives_the_material(self):
+        _write_log(self.log_path, [
+            ("12:25:34", "01-霜仙花-彩冰镇左上-3个.json", False),
+            ("12:26:59", "02-霜仙花-凯雷丝之翼-9个.json", False),
+            ("12:27:39", "04-月莲-茸蕈窟-4个.json", False),
+        ])
+
+        events = gather_cooldown.parse_day(self.log_path)
+        materials = [event["material"] for event in events]
+
+        self.assertEqual(materials, ["霜仙花", "霜仙花", "月莲"])
+        self.assertTrue(all(not event["failed"] for event in events))
+        self.assertEqual(events[0]["at"].hour, 12)
+        self.assertEqual(events[0]["at"].minute, 25)
+
+    def test_failed_routes_do_not_count(self):
+        """被停止快捷键打断的路线（「未正常走完」）不能算采过，否则会白等 48 小时。"""
+        _write_log(self.log_path, [
+            ("16:23:44", "04-便携轴承-蓝珀湖左上1-9个.json", True),
+            ("16:38:30", "01-万相石-厄布拉神柱-26个.json", False),
+        ])
+
+        events = gather_cooldown.parse_day(self.log_path)
+
+        self.assertTrue(events[0]["failed"])
+        self.assertFalse(events[1]["failed"])
+        self.assertIsNone(gather_cooldown.last_collected("便携轴承"))
+        self.assertIsNotNone(gather_cooldown.last_collected("万相石"))
+
+    def test_missing_directory_is_tolerated(self):
+        with patch.object(config, "BGI_LOG_DIR", os.path.join(self.tmp.name, "没有这个目录")):
+            self.assertEqual(gather_cooldown.scan_events(), [])
+            self.assertIsNone(gather_cooldown.last_collected("霜仙花"))
+
+
+class PartialCollectionTests(unittest.TestCase):
+    """防闪退隔离带的误判（玩家实测）：只跑了 1 条隔离带路线，整种材料却被记成"采过"。
+
+    实测数据：万相石 1/16、晶化骨髓 1/6、琉鳞石 1/6、星螺 1/5、珊瑚真珠 2/6 —— 都不该算采完。
+    """
+
+    def setUp(self):
+        self.now = datetime.datetime(2026, 9, 13, 12, 0, 0)
+        for name, value in (
+            ("last_collected", self.now - datetime.timedelta(hours=1)),
+            ("route_totals", {"霜仙花": 7, "万相石": 16, "晶化骨髓": 6}),
+            ("session_routes", 1),
+        ):
+            patcher = patch.object(gather_cooldown, name, return_value=value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def test_single_band_route_does_not_start_a_cooldown(self):
+        with patch.object(gather_cooldown, "session_routes", return_value=1):
+            result = gather_cooldown.status("万相石", now=self.now)
+
+        self.assertTrue(result["partial"])
+        self.assertFalse(result["cooling"])
+        self.assertIn("不算采完", gather_cooldown.describe(result))
+        self.assertIn("1/16", gather_cooldown.describe(result))
+
+    def test_full_collection_still_cools_down(self):
+        with patch.object(gather_cooldown, "session_routes", return_value=7):
+            result = gather_cooldown.status("霜仙花", now=self.now)
+
+        self.assertFalse(result["partial"])
+        self.assertTrue(result["cooling"])
+        self.assertIn("还没刷新", gather_cooldown.describe(result))
+
+    def test_mostly_collected_cools_down(self):
+        """6 条里跑了 5 条（83%）→ 算采完（给"某条路线坏了"留余地）。"""
+        with patch.object(gather_cooldown, "session_routes", return_value=5):
+            result = gather_cooldown.status("晶化骨髓", now=self.now)
+
+        self.assertFalse(result["partial"])
+        self.assertTrue(result["cooling"])
+
+    def test_half_collected_is_not_cooling(self):
+        """只跑了一半 → 还有没采的，可以继续采（别让玩家白等 48 小时）。"""
+        with patch.object(gather_cooldown, "session_routes", return_value=3):
+            result = gather_cooldown.status("晶化骨髓", now=self.now)
+
+        self.assertTrue(result["partial"])
+        self.assertFalse(result["cooling"])
+
+    def test_single_route_material_is_not_partial(self):
+        """只有一条路线的材料不存在"部分采集"，照常冷却。"""
+        with patch.object(gather_cooldown, "route_totals", return_value={"独苗": 1}), patch.object(
+            gather_cooldown, "last_collected",
+            return_value=self.now - datetime.timedelta(hours=1),
+        ), patch.object(gather_cooldown, "session_routes", return_value=1):
+            result = gather_cooldown.status("独苗", now=self.now)
+
+        self.assertFalse(result["partial"])
+        self.assertTrue(result["cooling"])
+
+
+class RouteTotalsTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        group_path = os.path.join(self.tmp.name, "地图素材.json")
+        with open(group_path, "w", encoding="utf-8") as handle:
+            json.dump({
+                "name": "地图素材",
+                "projects": [
+                    {"name": "01-霜仙花-彩冰镇左上-3个.json", "folderName": "地方特产\\挪德卡莱\\霜仙花"},
+                    {"name": "02-霜仙花-凯雷丝之翼-9个.json", "folderName": "地方特产\\挪德卡莱\\霜仙花"},
+                    {"name": "01-星螺-瑶光滩-17个.json", "folderName": "地方特产\\璃月\\星螺"},
+                    {"name": "1. 高成功率路线", "folderName": "地方特产\\璃月"},
+                ],
+            }, handle, ensure_ascii=False)
+
+        for name, value in (
+            ("BGI_MAP_CONFIG", group_path),
+            ("BGI_MINE_CONFIG", os.path.join(self.tmp.name, "没有.json")),
+            ("BGI_COOK_CONFIG", os.path.join(self.tmp.name, "没有.json")),
+        ):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gather_cooldown._ROUTE_TOTALS_CACHE_KEY["key"] = None
+
+    def test_counts_routes_per_material(self):
+        totals = gather_cooldown.route_totals()
+
+        self.assertEqual(totals.get("霜仙花"), 2)
+        self.assertEqual(totals.get("星螺"), 1)
+        # 目录层级抠出来的"璃月"不是材料名，不能混进来
+        self.assertNotIn("璃月", totals)
+        self.assertNotIn("高成功率路线", totals)
+
+
+class StatusTests(unittest.TestCase):
+    def setUp(self):
+        self.now = datetime.datetime(2026, 9, 13, 12, 0, 0)
+        patches = [
+            patch.object(gather_cooldown, "last_collected"),
+            # 这些用例只验证"时间算得对不对"，把"跑了几条路线"的判定打桩成"没有路线信息"
+            # （total=0 → 不判部分采集），免得被开发机上真实的采集记录带偏。
+            patch.object(gather_cooldown, "route_totals", return_value={}),
+            patch.object(gather_cooldown, "session_routes", return_value=0),
+        ]
+        self.last = patches[0].start()
+        for item in patches[1:]:
+            item.start()
+        for item in patches:
+            self.addCleanup(item.stop)
+
+    def test_unknown_material_is_treated_as_refreshed(self):
+        self.last.return_value = None
+
+        result = gather_cooldown.status("霜仙花", now=self.now)
+
+        self.assertFalse(result["cooling"])
+        self.assertFalse(result["known"])
+
+    def test_within_cooldown_is_blocked(self):
+        self.last.return_value = self.now - datetime.timedelta(hours=23)
+
+        result = gather_cooldown.status("霜仙花", now=self.now)
+
+        self.assertTrue(result["cooling"])
+        self.assertEqual(round(result["hours_left"]), 25)
+
+    def test_after_cooldown_is_refreshed(self):
+        self.last.return_value = self.now - datetime.timedelta(hours=49)
+
+        result = gather_cooldown.status("霜仙花", now=self.now)
+
+        self.assertFalse(result["cooling"])
+        self.assertEqual(result["hours_left"], 0.0)
+
+    def test_description_is_human_readable(self):
+        self.last.return_value = self.now - datetime.timedelta(hours=23)
+
+        text = gather_cooldown.describe(gather_cooldown.status("霜仙花", now=self.now))
+
+        self.assertIn("霜仙花", text)
+        self.assertIn("还没刷新", text)
+        self.assertIn("还要等", text)
+
+
+class ForceTests(unittest.TestCase):
+    def test_force_wording(self):
+        for text in ("强制采集霜仙花", "我知道没刷新，照跑", "无视冷却去采霜仙花"):
+            with self.subTest(text=text):
+                self.assertTrue(gather_cooldown.is_forced(text))
+
+    def test_normal_wording_is_not_force(self):
+        for text in ("去采集霜仙花", "帮我采点月莲", "打一次秘境"):
+            with self.subTest(text=text):
+                self.assertFalse(gather_cooldown.is_forced(text))
+
+
+class ResolveTests(unittest.TestCase):
+    def test_material_name_passes_through(self):
+        material, note = gather_cooldown.resolve_material("霜仙花")
+
+        self.assertEqual(material, "霜仙花")
+        self.assertEqual(note, "材料名")
+
+    def test_character_name_resolves_to_its_specialty(self):
+        """玩家说的是角色名（「蓝砚的突破材料」）时，用 TA 的 168 特产去查冷却。"""
+        material, note = gather_cooldown.resolve_material("蓝砚的突破材料")
+
+        self.assertEqual(material, "清水玉")
+        self.assertIn("角色解析", note)
+
+    def test_unknown_character_gets_an_honest_answer(self):
+        """本地字典没有的新角色（例如奥黛塔）：说清认不出来，请玩家给材料名 —— 绝不瞎猜。"""
+        material, note = gather_cooldown.resolve_material("奥黛塔")
+
+        self.assertEqual(material, "")
+        self.assertIn("请直接说材料名", note)
+
+
+class ManualRecordTests(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(gather_cooldown, "manual_state_path",
+                               return_value=os.path.join(self.tmp.name, "manual.json"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        # ⚠️ 别读开发机上真实的 BGI 日志 / 路线组：日志窗口是"最近 3 小时"，
+        #    真实日志里有没有这种材料的记录会随时间变，用例就会时好时坏。
+        #    这里显式打桩成"日志里一条路线都没有"，正好覆盖"手动登记"最重要的那条路径。
+        for name, value in (("route_totals", {"霜仙花": 7}), ("session_routes", 0)):
+            stub = patch.object(gather_cooldown, name, return_value=value)
+            stub.start()
+            self.addCleanup(stub.stop)
+
+    def test_manual_collection_starts_a_cooldown(self):
+        """手动登记 = 玩家说「游戏里我自己采过了」→ 必须真的开始 48 小时冷却。
+
+        实测踩过的坑：这一条以前靠「日志里 3 小时内有霜仙花路线」才碰巧通过；
+        日志一过期（同一份代码、换个时间跑）就退化 —— 手动登记那次日志里当然没有路线记录，
+        于是被判成「只采了一部分路线」（ran=0/7），**反而不冷却**，跟这个功能完全相反。
+        """
+        gather_cooldown.mark_manual("霜仙花")
+
+        result = gather_cooldown.status("霜仙花", now=datetime.datetime.now())
+
+        self.assertTrue(result["cooling"], "手动登记的「刚采过」必须真的进冷却")
+        self.assertTrue(result["manual"])
+        self.assertFalse(result["partial"], "手动登记不该被当成「部分采集」")
+        self.assertIn("还没刷新", gather_cooldown.describe(result))
+
+    def test_log_record_much_later_than_manual_wins(self):
+        """日志里有更新的采集记录时，仍按日志判（手动记录不再「压住」比例规则）。"""
+        gather_cooldown.mark_manual("霜仙花", when=datetime.datetime(2026, 9, 1, 8, 0, 0))
+        logged = datetime.datetime(2026, 9, 13, 10, 0, 0)
+
+        with patch.object(gather_cooldown, "last_collected", return_value=logged), patch.object(
+            gather_cooldown, "session_routes", return_value=1
+        ):
+            result = gather_cooldown.status("霜仙花", now=logged + datetime.timedelta(hours=1))
+
+        self.assertFalse(result["manual"])
+        self.assertTrue(result["partial"], "日志里只跑了 1/7 条 → 仍按隔离带规则判")
+
+    def test_clear_removes_the_record(self):
+        gather_cooldown.mark_manual("霜仙花")
+        gather_cooldown.clear_manual("霜仙花")
+
+        self.assertEqual(gather_cooldown.load_manual(), {})
+
+    def test_state_file_is_valid_json(self):
+        gather_cooldown.mark_manual("月莲")
+
+        data = json.load(open(gather_cooldown.manual_state_path(), encoding="utf-8"))
+
+        self.assertIn("月莲", data)
+
+
+class FilterTests(unittest.TestCase):
+    """执行前的拦截：`bgi_controller._filter_gather_cooldown`。"""
+
+    def setUp(self):
+        patcher = patch.object(gather_cooldown, "status")
+        self.status = patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def _cooling(self, material):
+        return {
+            "material": material, "last_at": datetime.datetime(2026, 9, 13, 12, 34),
+            "hours_ago": 1.0, "hours_left": 47.0, "cooling": True, "known": True,
+        }
+
+    def _ready(self, material):
+        return {
+            "material": material, "last_at": None, "hours_ago": None,
+            "hours_left": 0.0, "cooling": False, "known": False,
+        }
+
+    def test_cooling_material_is_dropped_with_an_explanation(self):
+        self.status.side_effect = lambda material: self._cooling(material)
+
+        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"])
+
+        self.assertEqual(kept, [])
+        self.assertTrue(any("霜仙花" in line for line in lines))
+
+    def test_refreshed_material_is_kept(self):
+        self.status.side_effect = lambda material: self._ready(material)
+
+        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"])
+
+        self.assertEqual(kept, ["霜仙花"])
+        self.assertEqual(lines, [])
+
+    def test_force_keeps_it_and_says_so(self):
+        self.status.side_effect = lambda material: self._cooling(material)
+
+        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"], force=True)
+
+        self.assertEqual(kept, ["霜仙花"])
+        self.assertTrue(any("强制采集" in line for line in lines))
+
+    def test_unresolvable_target_is_kept_but_flagged(self):
+        """认不出的目标不能静默丢掉（下游会按老逻辑提示玩家找不到路线）。"""
+        with patch.object(gather_cooldown, "resolve_material", return_value=("", "认不出来")):
+            kept, lines = bgi_controller._filter_gather_cooldown(["奥黛塔"])
+
+        self.assertEqual(kept, ["奥黛塔"])
+        self.assertTrue(any("认不出来" in line for line in lines))
+
+
+class PromptBlockTests(unittest.TestCase):
+    def test_block_lists_cooling_materials_and_the_rules(self):
+        with patch.object(gather_cooldown, "cooling_materials", return_value=[{
+            "material": "霜仙花", "last_at": datetime.datetime(2026, 9, 13, 12, 34),
+            "hours_ago": 1.0, "hours_left": 47.0, "cooling": True, "known": True,
+        }]):
+            block = gather_cooldown.cooldown_block()
+
+        self.assertIn("采集物冷却", block)
+        self.assertIn("霜仙花", block)
+        self.assertIn("48 小时", block)
+        self.assertIn("强制采集", block)
+        self.assertIn("别猜", block)
+
+    def test_no_block_when_nothing_is_cooling(self):
+        with patch.object(gather_cooldown, "cooling_materials", return_value=[]):
+            self.assertEqual(gather_cooldown.cooldown_block(), "")
+
+
+if __name__ == "__main__":
+    unittest.main()

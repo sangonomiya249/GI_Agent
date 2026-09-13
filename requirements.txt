@@ -1,34 +1,22 @@
-annotated-types==0.7.0
-anyio==4.13.0
-blinker==1.9.0
-certifi==2026.4.22
-charset-normalizer==3.4.7
-click==8.3.3
-distro==1.9.0
-Flask==3.1.3
-greenlet==3.4.0
-h11==0.16.0
-httpcore==1.0.9
-httpx==0.28.1
-idna==3.13
-itsdangerous==2.2.0
-Jinja2==3.1.6
-jiter==0.14.0
+# ============================================================
+#  GI Agent 依赖清单
+#  安装：pip install -r requirements.txt
+#  （Python 3.10+；Windows 上还要装 BetterGI 本体，见 README「重要前置配置」）
+# ============================================================
+
+# ---------- 必需：Agent 主体（QQ / 飞书服务端、Studio 后端、BetterGI 自动化） ----------
+Flask==3.1.3                # Studio 后端、飞书 Webhook 服务端
+Werkzeug==3.1.8             # app_web.py 直接用（WSGI 工具）
+openai==2.32.0              # 大模型客户端（OpenAI 兼容接口：DeepSeek / GitHub Models / NVIDIA / 本地…）
+httpx==0.28.1               # QQ 开放平台、米游社 API、模型客户端共用
+requests==2.33.1            # 百科字典 / 展柜数据抓取
+urllib3==2.6.3              # 重试适配器（env_reader / dict_updater 直接用）
+python-dotenv==1.2.2        # 读 .env
+websockets==16.0            # QQ 机器人 WebSocket 长连接
+
+# ---------- 可选：用不到就别装 ----------
+# 飞书通道（api/feishu_api.py 是延迟导入，不装也不会影响 QQ / Studio / 命令行）
 lark-oapi==1.5.5
-MarkupSafe==3.0.3
-openai==2.32.0
+# 离线字典抓取脚本（skills/*_scraper.py，把 yatta/百科数据抓成 memory/*.json）。
+# 只跑 Agent 不需要它；装完还要下载浏览器内核：playwright install chromium
 playwright==1.58.0
-pycryptodome==3.23.0
-pydantic==2.13.3
-pydantic_core==2.46.3
-pyee==13.0.1
-python-dotenv==1.2.2
-requests==2.33.1
-requests-toolbelt==1.0.0
-sniffio==1.3.1
-tqdm==4.67.3
-typing-inspection==0.4.2
-typing_extensions==4.15.0
-urllib3==2.6.3
-websockets==16.0
-Werkzeug==3.1.8

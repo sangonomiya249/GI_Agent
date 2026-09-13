@@ -3,7 +3,19 @@
 BOSS掉落素材数据库演示脚本
 
 这个脚本演示了如何使用BOSS掉落物品管理系统
+
+用法（在项目根目录）：python scripts/demo_boss_drops.py
+
+⚠️ 从 scripts/ 里跑时，`skills` 这个包不在 sys.path 上，所以下面先把项目根加进去 ——
+这个脚本原来放在根目录，搬进 scripts/ 后不加这一句就会 ModuleNotFoundError。
 """
+
+import os
+import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
 
 from skills.boss_drop_scraper import (
     load_boss_drops, 

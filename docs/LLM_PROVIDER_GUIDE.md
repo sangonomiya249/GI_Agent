@@ -68,7 +68,7 @@ MODEL_NAME=llama2
 
 运行测试脚本验证配置是否正确：
 ```bash
-./gi_env/bin/python test_llm_config.py
+venv\Scripts\python.exe scripts\check_llm_config.py
 ```
 
 输出示例：

@@ -9,16 +9,26 @@ import threading
 import time
 from flask import Flask
 from dotenv import load_dotenv
-import lark_oapi as lark
-from lark_oapi.api.im.v1 import *
-from lark_oapi.adapter.flask import *
+
+# ⚠️ 飞书 SDK 是**可选依赖**（约 37 MB）。这里没装就给人话提示并退出，
+#    而不是丢一段 ImportError 堆栈 —— 只用 QQ 的人完全可以不装它。
+try:
+    import lark_oapi as lark
+    from lark_oapi.api.im.v1 import *
+    from lark_oapi.adapter.flask import *
+except ImportError as exc:  # pragma: no cover - 取决于是否安装可选依赖
+    print(
+        "❌ 这个入口需要飞书官方 SDK `lark_oapi`（可选依赖，约 37 MB），当前没装上：\n"
+        f"   {exc}\n"
+        "   ↳ 装上即可：pip install lark_oapi\n"
+        "   ↳ 只用 QQ 机器人 / 终端的话不需要它，直接 `python main.py` 或 `python main.py qq`。"
+    )
+    raise SystemExit(1)
 
 # 引入我们刚才拆分出来的各个核心模块
 import config
-from brain import memory_manager, llm_brain
-from skills import bgi_controller
 from api import feishu_api
-from skills.env_reader import fetch_enka_data
+from channels import agent_router
 
 load_dotenv()
 
@@ -26,119 +36,16 @@ load_dotenv()
 VERIFICATION_TOKEN = os.getenv("FEISHU_VERIFICATION_TOKEN", "")
 ENCRYPT_KEY = ""  # 没开加密留空
 
-# 🌟 消息去重：记录最近处理过的消息ID和时间戳，防止飞书重试导致重复处理
-PROCESSED_MESSAGES = {}
-MESSAGE_TTL = 300 
-
 app = Flask(__name__)
-
-# ================= 辅助函数 =================
-def is_message_processed(message_id: str) -> bool:
-    """检查消息是否已处理过（去重机制）"""
-    current_time = time.time()
-    
-    # 清理过期的消息记录
-    expired_ids = [mid for mid, ts in PROCESSED_MESSAGES.items() if current_time - ts > MESSAGE_TTL]
-    for mid in expired_ids:
-        del PROCESSED_MESSAGES[mid]
-    
-    if message_id in PROCESSED_MESSAGES:
-        print(f"⚠️ 消息 {message_id} 已处理过，跳过重复处理")
-        return True
-    
-    PROCESSED_MESSAGES[message_id] = current_time
-    return False
-
-def refresh_env_context(uid):
-    """拉取最新展柜数据并组装上下文字符串"""
-    env_data = fetch_enka_data(uid)
-    data_str = json.dumps(env_data, ensure_ascii=False)
-    return f"以下是玩家 UID {uid} 的最新展柜数据（JSON）：\n{data_str}"
 
 # ================= 核心路由与拦截 =================
 def _handle_message_impl(msg_content: str, open_id: str) -> None:
-    """消息的实际路由处理器"""
-    store = memory_manager.load_chat_store()
-    uid = store.get("uid", config.DEFAULT_UID)
-    messages = store.get("messages", [])
+    """消息的实际路由处理器。
 
-    # 首次启动或被清理后，自动拉取展柜数据
-    if not store.get("env_context"):
-        try:
-            store["env_context"] = refresh_env_context(uid)
-        except Exception as e:
-            store["env_context"] = f"展柜数据暂不可用：{e}"
-
-    # 🌟 1. 处理系统快捷指令
-    user_input = msg_content.lower()
-
-    if user_input in ['exit', 'quit', '退出']:
-        feishu_api.send_feishu_msg(open_id, "👋 飞书服务端运行中，无需手动退出。")
-        return
-
-    if user_input == 'clear':
-        store = {"uid": uid, "env_context": "", "messages": [], "wallet": {"mora": 0, "exp_books": 0, "boss_mats": {}}, "pending_task": None}
-        if os.path.exists(config.HISTORY_FILE):
-            os.remove(config.HISTORY_FILE)
-        print("🧹 记忆已清空。")
-        feishu_api.send_feishu_msg(open_id, "🧹 记忆已清空。")
-        return
-
-    if user_input == 'refresh':
-        print("🔄 正在刷新最新展柜上下文...")
-        try:
-            store["env_context"] = refresh_env_context(uid)
-            memory_manager.save_chat_store(store)
-            feishu_api.send_feishu_msg(open_id, "✅ 展柜上下文已刷新。")
-        except Exception as e:
-            feishu_api.send_feishu_msg(open_id, f"❌ 刷新失败: {e}")
-        return
-
-    if user_input == 'history':
-        feishu_api.send_feishu_msg(open_id, f"📚 当前历史消息数：{len(messages)}")
-        return
-
-    # 🌟 2. 检查是否有待审批的自动化任务
-    pending_task = store.get("pending_task")
-    if pending_task:
-        bgi_cmd = pending_task.get("bgi_cmd")
-        stored_uid = pending_task.get("uid", uid)
-        
-        if user_input in ['y', 't', 'yes', '确认', '执行']:
-            decision_lower = 'y' if user_input in ['y', 'yes', '确认', '执行'] else 't'
-            print(f"🛑 收到审批结果: {decision_lower}")
-            feishu_api.send_feishu_msg(open_id, "⚙️ 指令已确认，正在下发配置给 BetterGI...")
-            
-            store["pending_task"] = None
-            memory_manager.save_chat_store(store)
-            
-            # 将物理外挂执行放入后台线程
-            threading.Thread(target=bgi_controller.execute_bgi_task, args=(bgi_cmd, decision_lower, store, open_id, stored_uid)).start()
-            return
-        else:
-            print("\n🚫 审批已驳回。正在将你的要求反馈给大脑重新规划...")
-            store["pending_task"] = None
-            feedback_msg = f"我拒绝了刚才的执行申请。我的新要求是：{msg_content}。请根据我的新要求重新评估，并输出新的 JSON 指令。"
-            messages.append({"role": "user", "content": feedback_msg})
-            messages = memory_manager.trim_history(messages)
-            store["messages"] = messages
-            memory_manager.save_chat_store(store)
-            feishu_api.send_feishu_msg(open_id, "🚫 计划已撤销。正在根据您的要求重新评估...")
-            # 不 return，继续走到下方的大模型思考逻辑
-
-    # 🌟 3. 普通聊天，存入记忆并交给大脑思考
-    if not msg_content:
-        return
-
-    if not pending_task:
-        messages.append({"role": "user", "content": msg_content})
-        messages = memory_manager.trim_history(messages)
-        store["messages"] = messages
-        memory_manager.save_chat_store(store)
-
-    print("🧠 正在唤醒大模型思考...")
-    # 把大模型思考抛到后台，立刻让飞书请求返回 200 OK
-    threading.Thread(target=llm_brain.ask_agent, args=(messages, store, uid, open_id)).start()
+    🌟 真正的逻辑已经搬到 `channels/agent_router.py`（QQ 通道共用同一份），
+    这里只是保留旧名字，避免外部脚本/习惯调用失效。
+    """
+    agent_router.handle_message(msg_content, open_id)
 
 
 def process_message_async(data: P2ImMessageReceiveV1) -> None:
@@ -147,12 +54,9 @@ def process_message_async(data: P2ImMessageReceiveV1) -> None:
         msg_content = json.loads(data.event.message.content).get("text", "").strip()
         open_id = data.event.sender.sender_id.open_id
         message_id = data.event.message.message_id
-        
-        if is_message_processed(message_id):
-            return
-        
+
         print(f"\n👤 旅行者 (飞书): {msg_content}")
-        _handle_message_impl(msg_content, open_id)
+        agent_router.handle_message_async(msg_content, open_id, message_id)
     except Exception as e:
         print(f"❌ 异步处理消息时出错: {e}")
 
@@ -170,6 +74,13 @@ def webhook_event():
     return parse_resp(resp)
 
 if __name__ == "__main__":
+    # 🌟 飞书未配置时直接退出，避免白跑一个无法收发消息的服务端
+    if not feishu_api.is_feishu_configured():
+        print("[提示] 未配置飞书（FEISHU_APP_ID / FEISHU_APP_SECRET），无需启动飞书服务端。")
+        print("   想通过飞书对话控制 Agent，请在 .env 填好这两项后重试；")
+        print("   只想在本机终端使用，请直接运行：python main.py")
+        raise SystemExit(0)
+
     print("🚀 原神智能体启动中...")
     print("\n" + "="*40)
     print("✨ Agent 架构重构完成！飞书服务端已启动。")

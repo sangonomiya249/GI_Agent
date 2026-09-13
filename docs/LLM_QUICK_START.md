@@ -60,7 +60,7 @@ MODEL_NAME=llama2  # 根据本地模型名调整
 ## ✅ 验证配置
 
 ```bash
-./gi_env/bin/python test_llm_config.py
+venv\Scripts\python.exe scripts\check_llm_config.py
 ```
 
 应该看到：`✅ [PROVIDER] 客户端创建成功!`
@@ -104,7 +104,7 @@ MODEL_NAME=llama2  # 根据本地模型名调整
 ### 改了 `.env` 还是不行？
 - 确保 `.env` 文件保存了
 - 检查 API Key 是否正确
-- 运行验证脚本：`./gi_env/bin/python test_llm_config.py`
+- 运行验证脚本：`venv\Scripts\python.exe scripts\check_llm_config.py`
 
 ### 我想用本地模型（Ollama、vLLM），怎么配？
 1. 先启动本地模型服务：
@@ -135,8 +135,9 @@ MODEL_NAME=llama2  # 根据本地模型名调整
 ## 📚 详细文档
 
 - 📖 完整指南: `LLM_PROVIDER_GUIDE.md`
-- 📋 修改总结: `MODIFICATION_SUMMARY.md`
-- 🧪 配置测试: `test_llm_config.py`
+- 🖥️ 本地模型: `LOCAL_MODEL_GUIDE.md`
+- ⚙️ Studio 界面与排错: `STUDIO.md`
+- 🧪 配置自检（会真的请求一次）: `scripts\check_llm_config.py`
 
 ---
 

@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>GI Agent Studio</title>
+<link rel="icon" type="image/png" href="GI-agent.png" />
+<link rel="stylesheet" href="app.css" />
+</head>
+<body>
+<div class="app">
+  <!-- ============ 左侧导航 ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-logo"><img src="GI-agent.png" alt="GI Agent" /></div>
+      <div class="brand-text">
+        <div class="brand-title">GI Agent</div>
+        <div class="brand-sub">Teyvat Operations</div>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <div class="nav-label">工作台</div>
+      <button class="nav-item active" data-page="run"><span class="ico" data-icon="play"></span>运行 <em class="badge hidden" id="nav-badge-run">1</em></button>
+      <button class="nav-item" data-page="dashboard"><span class="ico" data-icon="layout"></span>概览</button>
+      <button class="nav-item" data-page="routes"><span class="ico" data-icon="map"></span>任务与路线</button>
+      <button class="nav-item" data-page="channels"><span class="ico" data-icon="plug"></span>远程通道</button>
+      <div class="nav-label nav-label-secondary">系统</div>
+      <button class="nav-item" data-page="config"><span class="ico" data-icon="sliders"></span>配置</button>
+      <button class="nav-item" data-page="guide"><span class="ico" data-icon="book"></span>使用说明</button>
+      <button class="nav-item" data-page="doctor"><span class="ico" data-icon="pulse"></span>环境体检</button>
+      <button class="nav-item" data-page="logs"><span class="ico" data-icon="terminal"></span>BetterGI 日志</button>
+      <button class="nav-item" data-page="about"><span class="ico" data-icon="info"></span>关于</button>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="foot-row"><span class="dot" id="side-dot"></span><span id="side-state">未运行</span></div>
+      <div class="foot-hint">对话式自动化 · 本地运行</div>
+      <button class="btn ghost sm" id="btn-quit" style="margin-top:10px;width:100%"><span class="btn-icon" data-icon="power"></span>退出 Studio</button>
+    </div>
+  </aside>
+
+  <!-- ============ 主区域 ============ -->
+  <main class="main">
+    <header class="topbar">
+      <div class="topbar-title">
+        <h1 id="page-title">概览</h1>
+        <p id="page-sub">一眼看清 Agent、BetterGI 与今天的路线状态</p>
+      </div>
+      <div class="topbar-actions">
+        <div class="pill" id="status-pill"><span class="dot"></span><span id="status-text">未运行</span></div>
+        <button class="btn ghost icon-btn" id="btn-theme" title="切换明暗主题"><span data-icon="moon"></span></button>
+        <button class="btn primary" id="btn-start"><span class="btn-icon" data-icon="play"></span>启动 Agent</button>
+        <button class="btn danger" id="btn-stop" disabled><span class="btn-icon" data-icon="stop"></span>停止</button>
+        <!-- 原生窗口（GI-Agent-Studio.exe）里才显示：无边框窗口的最小化/最大化/关闭 -->
+        <div class="win-controls hidden" id="win-controls">
+          <button class="win-btn" id="win-min" title="最小化"><span data-icon="min"></span></button>
+          <button class="win-btn" id="win-max" title="最大化 / 还原"><span data-icon="max"></span></button>
+          <button class="win-btn win-close" id="win-close" title="关闭"><span data-icon="close"></span></button>
+        </div>
+      </div>
+    </header>
+
+    <section class="content" id="content">
+
+      <!-- ---------- 概览 ---------- -->
+      <div class="page hidden" data-page="dashboard">
+        <div class="cards" id="dash-cards"></div>
+
+        <div class="grid-2">
+          <div class="card">
+            <div class="card-head"><h2>本轮将执行</h2><span class="muted" id="dash-plan-hint">等待 Agent 规划…</span></div>
+            <div class="plan" id="dash-plan"><div class="empty">还没有规划结果：去「运行」页启动 Agent 并说出你的需求。</div></div>
+            <div class="row-actions" id="dash-plan-actions"></div>
+          </div>
+
+          <div class="card">
+            <div class="card-head"><h2>BetterGI 最近日志</h2><button class="btn ghost sm" id="dash-log-refresh">刷新</button></div>
+            <div class="bgi-highlight" id="dash-highlight"></div>
+            <div class="log-mini" id="dash-bgi-log"></div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>远程通道</h2><span class="muted" id="dash-chan-hint">QQ 机器人 / 飞书</span></div>
+          <div class="chan-mini" id="dash-channels"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head"><h2>快捷操作</h2></div>
+          <div class="quick" id="dash-quick">
+            <button class="btn ghost" data-act="refresh-env"><span class="btn-icon" data-icon="refresh"></span>刷新展柜</button>
+            <button class="btn ghost" data-act="doctor"><span class="btn-icon" data-icon="pulse"></span>环境体检</button>
+            <button class="btn ghost" data-act="open" data-target="project"><span class="btn-icon" data-icon="folder"></span>项目目录</button>
+            <button class="btn ghost" data-act="open" data-target="bgi_log"><span class="btn-icon" data-icon="folder"></span>BetterGI 日志</button>
+            <button class="btn ghost" data-act="open" data-target="script_group"><span class="btn-icon" data-icon="folder"></span>脚本组目录</button>
+            <button class="btn ghost" data-act="open" data-target="backups"><span class="btn-icon" data-icon="folder"></span>备份目录</button>
+            <button class="btn ghost" data-act="rollback"><span class="btn-icon" data-icon="undo"></span>回滚配置</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- 运行 ---------- -->
+      <div class="page" data-page="run">
+        <div class="run-layout">
+          <div class="card run-chat">
+            <div class="chat-head">
+              <div>
+                <div class="eyebrow">AGENT WORKSPACE</div>
+                <h2>和 Agent 说说今天要做什么</h2>
+                <p class="muted">用自然语言描述目标，Agent 会先给出方案，再等待你的确认。</p>
+              </div>
+              <div class="chat-tools">
+                <label class="switch"><input type="checkbox" id="autoscroll" checked /><span>自动滚动</span></label>
+                <button class="btn ghost sm" id="btn-clear-log">清空日志</button>
+              </div>
+            </div>
+            <div class="console chat-console" id="console"></div>
+            <div class="run-input-area">
+              <div class="composer">
+                <input id="input-text" type="text" placeholder="例如：锄大地 璃月，或去打一趟蓝砚武器突破副本" autocomplete="off" />
+                <button class="btn primary send-btn" id="btn-send"><span class="btn-icon" data-icon="play"></span>发送</button>
+              </div>
+              <div class="run-shortcuts">
+                <span class="shortcut-label">快捷操作</span>
+                <button class="btn primary big" data-send="y"><span class="btn-icon" data-icon="check"></span>批准执行 <kbd>Y</kbd></button>
+                <button class="btn big" data-send="t"><span class="btn-icon" data-icon="file"></span>仅写配置 <kbd>T</kbd></button>
+                <button class="btn danger big" data-send="exit"><span class="btn-icon" data-icon="logout"></span>退出 Agent <kbd>Esc</kbd></button>
+              </div>
+            </div>
+          </div>
+
+          <aside class="run-sidebar">
+            <div class="card plan-card">
+              <div class="card-head">
+                <div>
+                  <div class="eyebrow">CURRENT PLAN</div>
+                  <h2>本轮执行计划</h2>
+                </div>
+                <span class="muted" id="plan-hint">等待规划</span>
+              </div>
+              <div class="plan" id="run-plan"><div class="empty">Agent 还没提出方案。</div></div>
+              <div class="plan-note"><span class="status-icon" data-icon="info"></span><span>方案会先写入这里，确认后才会提交给 BetterGI。</span></div>
+            </div>
+            <div class="card run-guide">
+              <div class="eyebrow">COMMANDS</div>
+              <h2>常用指令</h2>
+              <div class="command-list">
+                <button class="command-row" data-send="refresh"><span class="command-key">refresh</span><span>刷新展柜数据</span></button>
+                <button class="command-row" data-send="history"><span class="command-key">history</span><span>查看历史记录</span></button>
+                <button class="command-row" data-send="rollback"><span class="command-key">rollback</span><span>回滚配置变更</span></button>
+              </div>
+            </div>
+          </aside>
+        </div>
+      </div>
+
+      <!-- ---------- 任务与路线 ---------- -->
+      <div class="page hidden" data-page="routes">
+        <div class="cards" id="route-cards"></div>
+        <div class="card">
+          <div class="card-head"><h2>调度器脚本组</h2><span class="muted" id="routes-hint"></span></div>
+          <div class="table-wrap"><table class="table" id="routes-table"></table></div>
+        </div>
+      </div>
+
+      <!-- ---------- 远程通道 ---------- -->
+      <div class="page hidden" data-page="channels">
+        <div class="card">
+          <div class="card-head">
+            <h2>远程通道</h2>
+            <span class="muted" id="chan-hint">QQ 机器人 / 飞书服务端都在这里启停，日志内嵌在下面</span>
+          </div>
+          <div class="hint">
+            点右上角「启动 Agent」时，<b>已填好配置</b>且开着「随 Agent 自动启动」的通道会被一起唤醒；
+            点「停止」或关窗口时会一起关掉。没填配置的通道不会启动（下面会写明缺哪一项）。
+            通道是独立进程：QQ 机器人本身就是完整的 Agent 入口，不需要 Studio 里的 Agent 也在跑。
+          </div>
+          <div id="chan-cards"></div>
+        </div>
+      </div>
+
+      <!-- ---------- 配置 ---------- -->
+      <div class="page hidden" data-page="config">
+        <div class="card">
+          <div class="config-banner">
+            <div class="config-banner-mark">LLM</div>
+            <div>
+              <strong>先选供应商，再填写接口信息</strong>
+              <p>DeepSeek 使用 OpenAI 兼容接口。选择 DeepSeek 后，接口地址会自动切换为官方地址。</p>
+            </div>
+          </div>
+          <div class="card-head">
+            <h2>配置（.env）</h2>
+            <div class="row-actions tight">
+              <label class="switch"><input type="checkbox" id="show-secret" /><span>显示密钥</span></label>
+              <button class="btn ghost sm" id="btn-config-reload">重新载入</button>
+              <button class="btn primary sm" id="btn-config-save">保存</button>
+            </div>
+          </div>
+          <div class="muted" id="config-path"></div>
+          <div class="config-layout">
+            <div class="tabs" id="config-tabs"></div>
+            <div class="config-form" id="config-form"></div>
+          </div>
+          <div class="hint">保存会把改动写回 .env（并自动备份成 .env.bak-时间戳）。改完需要重启 Agent 才生效。</div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>米游社个人战绩（可选）</h2>
+            <div class="row-actions tight">
+              <button class="btn ghost sm" id="btn-mys-check">验证 Cookie</button>
+              <button class="btn ghost sm" id="btn-mys-refresh">拉一次全角色名单</button>
+            </div>
+          </div>
+          <div class="muted" id="mys-status">读取中…</div>
+          <div id="mys-result"></div>
+          <div class="hint">
+            「配置」页里有 <code>MYS_COOKIE</code> 的输入框（在「米游社个人战绩（可选）」这一组里，字段类型是密码框）。
+            填完先点上面的<b>验证 Cookie</b>（只会发 1 次请求，读你的角色列表），成功再点<b>保存</b>。
+            验证直接用输入框里的当前内容，<b>不需要先保存</b>。<br />
+            ⚠️ Cookie 是账号级凭据：只写进本机 <code>.env</code>，接口只回掩码；拿法与排错见 <code>docs/MYS_COOKIE.md</code>。
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- 体检 ---------- -->
+      <div class="page hidden" data-page="doctor">
+        <div class="card">
+          <div class="card-head">
+            <h2>环境体检</h2>
+            <div class="row-actions tight">
+              <span class="muted" id="doctor-summary"></span>
+              <button class="btn primary sm" id="btn-doctor">重新检查</button>
+            </div>
+          </div>
+          <div class="doctor" id="doctor-rows"><div class="empty">点「重新检查」开始。</div></div>
+        </div>
+      </div>
+
+      <!-- ---------- BetterGI 日志 ---------- -->
+      <div class="page hidden" data-page="logs">
+        <div class="card">
+          <div class="card-head">
+            <h2>BetterGI 日志</h2>
+            <div class="row-actions tight">
+              <select id="log-file" class="select"></select>
+              <input id="log-keyword" class="input sm" placeholder="关键字过滤（如 战斗策略）" />
+              <button class="btn ghost sm" id="btn-bgi-log">刷新</button>
+              <button class="btn ghost sm" data-act="open" data-target="bgi_log">打开目录</button>
+            </div>
+          </div>
+          <div class="bgi-highlight" id="bgi-highlight"></div>
+          <div class="console tall" id="bgi-console"></div>
+        </div>
+      </div>
+
+      <!-- ---------- 使用说明 ---------- -->
+      <div class="page hidden" data-page="guide">
+        <div class="card">
+          <div class="card-head">
+            <h2>上手清单</h2>
+            <div class="row-actions tight">
+              <span class="muted" id="guide-summary"></span>
+              <button class="btn ghost sm" id="btn-guide-repair" title="清掉无效的一条龙任务项 / 关掉 Boss 脚本的启动编辑器（需要先关闭 BetterGI）"><span class="btn-icon" data-icon="wrench"></span>一键修复</button>
+              <button class="btn primary sm" id="btn-guide-reload">重新检查</button>
+            </div>
+          </div>
+          <div class="doctor" id="guide-steps"><div class="empty">正在检查…</div></div>
+          <div class="hint" id="guide-paths"></div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>一条龙要添加哪些调度器</h2>
+            <span class="muted">名字必须与 <code>User\ScriptGroup\&lt;名字&gt;.json</code> 完全一致</span>
+          </div>
+          <div class="table-wrap"><table class="table" id="guide-tasks"></table></div>
+          <div class="hint">
+            调度器 = BetterGI 里的「脚本组」：把脚本仓库里的路径追踪目录 / JS 脚本加进一个组，
+            给它起名，然后在「一条龙」界面把它添加进去。<b>组名就是一条龙任务名</b>，
+            BetterGI 运行时按这个名字去取 <code>User\ScriptGroup\&lt;名字&gt;.json</code>。
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h2>一、在 BetterGI 里配置一条龙</h2>
+            <ol class="steps">
+              <li><b>装好 BetterGI 并至少手动跑过一次</b>：它会生成 <code>User\config.json</code>、<code>User\OneDragon\*.json</code>、<code>User\AutoPathing</code>。</li>
+              <li><b>建调度器（脚本组）</b>：进入「调度器」，把脚本仓库里对应的目录加进一个组：
+                <ul>
+                  <li><code>pathing/地方特产</code> → 组名 <b>地图素材</b>（建议全选，不用怕路线重叠）</li>
+                  <li><code>pathing/敌人与魔物</code> → 组名 <b>敌人与魔物</b>（整组 1000+ 条也行，Agent 会按目标自动精简）</li>
+                  <li><code>pathing/锄地专区</code> → 组名 <b>锄大地</b>（缺失时 Agent 会按 <code>User\AutoPathing\锄地专区</code> 自动生成）</li>
+                  <li><code>pathing/矿物</code>、<code>pathing/食材与炼金</code> → 组名 <b>矿物</b>、<b>食材与炼金</b>（也可以按材料建小组，如 石珀 / 虹滴晶）</li>
+                  <li>JS 脚本 <b>批量讨伐角色养成材料BOSS</b>、<b>狗粮AAA</b>（AAA 狗粮批发）→ 各自建成同名组</li>
+                </ul>
+              </li>
+              <li><b>加进一条龙</b>：在「一条龙」界面把这些组添加进任务列表并勾选一次。
+                Agent 之后会自动开关它们（未登记的组它也会自动补登记）。</li>
+              <li><b>组内设置检查</b>：战斗策略建议用「根据队伍自动选择」，或确保策略 txt 真的在
+                <code>User\AutoFight\</code> 下（体检里会列出对不上的组）。</li>
+              <li><b>计划任务</b>（可选但强烈建议）：以管理员身份运行一次
+                <code>scripts\setup_start_bettergi_task.ps1</code>，见下方 PowerShell 说明。</li>
+            </ol>
+            <div class="hint">
+              Agent 会改的东西：一条龙配置里的 <code>TaskEnabledList</code> / <code>TaskOrder</code>（按任务 Id）、
+              脚本组里的路线 <code>status</code>、刷本次数写进 <code>User\config.json → autoDomainConfig</code>、
+              Boss 列表写进脚本的 <code>assets\config\config.json</code>。
+              所有写入都有备份与 Diff，可用 <code>rollback &lt;事务ID&gt;</code> 还原。
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>二、配置这个软件（.env）</h2>
+            <div class="kv">
+              <div><b>LLM 模型</b><span><code>LLM_PROVIDER</code>（openai / github / nvidia / custom / local）+ <code>MODEL_NAME</code></span></div>
+              <div><b>模型密钥</b><span><code>OPENAI_API_KEY</code>（或对应提供商的 key）</span></div>
+              <div><b>接口地址</b><span><code>OPENAI_BASE_URL</code>：走 DeepSeek 就填 <code>https://api.deepseek.com/v1</code></span></div>
+              <div><b>你的 UID</b><span><code>DEFAULT_UID</code>（展柜数据按它抓取）</span></div>
+              <div><b>BetterGI 路径</b><span><code>BGI_DIR</code>（默认 <code>C:\Program Files\BetterGI</code>）</span></div>
+              <div><b>脚本组名</b><span><code>BGI_MAP_CONFIG_NAME</code> / <code>BGI_ENEMY_CONFIG_NAME</code> / <code>BGI_HOE_CONFIG_NAME</code> / <code>BGI_MINE_CONFIG_NAME</code> / <code>BGI_COOK_CONFIG_NAME</code></span></div>
+              <div><b>路线组策略</b><span><code>BGI_ROUTE_GROUP_POLICY</code>（默认 shrink：大组自动精简+归档）、<code>BGI_MAX_ROUTE_GROUP_SIZE</code></span></div>
+              <div><b>JS 脚本设置</b><span><code>BGI_JS_SCRIPT_SETTINGS</code>：默认关掉 Boss 脚本启动时的配置编辑器</span></div>
+              <div><b>刷本树脂</b><span><code>DOMAIN_RESIN_PREFERENCE</code>（原粹树脂20 / 原粹树脂40 / 浓缩树脂）</span></div>
+              <div><b>飞书（可选）</b><span><code>FEISHU_APP_ID</code> / <code>FEISHU_APP_SECRET</code> / <code>FEISHU_VERIFICATION_TOKEN</code></span></div>
+              <div><b>QQ 机器人（可选）</b><span><code>QQ_BOT_APPID</code> / <code>QQ_BOT_SECRET</code> / <code>QQ_BOT_ALLOWED_USERS</code>（+ <code>QQ_BOT_ALLOW_ANYONE</code> 危险开关）</span></div>
+            </div>
+            <div class="hint">
+              直接在左边「配置」页里改，保存会自动备份成 <code>.env.bak-时间戳</code>；
+              <b>改完要「■ 停止」再「▶ 启动」才生效</b>（配置在进程启动时读取）。
+              运行环境换机器时，至少要改：<code>BGI_DIR</code>、<code>DEFAULT_UID</code>、LLM 密钥。
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>三、PowerShell 配置项（免 UAC 启动 / 关闭 BetterGI / 关闭原神）</h2>
+            <span class="muted">注册脚本以管理员身份跑一次就够</span>
+          </div>
+          <div class="table-wrap"><table class="table" id="guide-scheduled"></table></div>
+          <div id="guide-ps"></div>
+          <div class="hint">
+            为什么要它们：BetterGI 和原神通常都是<b>以管理员权限</b>运行的，而 Agent 在普通权限终端/机器人里跑 ——
+            直接 <code>taskkill</code> 会 <code>Access denied</code>（原神就是这句「拒绝访问」），直接启动 BetterGI 会弹 UAC；
+            而且 BetterGI 是单实例程序，<b>热启动不会触发新的一条龙</b>，必须先关掉再冷启动。
+            所以用三个「最高权限」的计划任务代劳：<code>StartBetterGI</code> / <code>StopBetterGI</code> / <code>StopGenshin</code>。<br />
+            ⚠️ <b>管理员 PowerShell 打开时默认在 <code>C:\WINDOWS\system32</code></b>，所以上面命令里的路径是<b>完整路径</b>，
+            直接复制粘贴即可；写成相对路径会报「实际参数…不存在」。<br />
+            状态文件：<code>scripts\stop_bettergi.pids</code>/<code>.log</code>（关 BGI 的目标与记录）、
+            <code>scripts\stop_genshin.pids</code>/<code>.log</code>（关原神的目标与记录）。
+            两个关闭脚本都<b>只按 PID 文件精确关闭</b>，并且校验进程名白名单，绝不按进程名乱杀。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>三·五、远程遥控（可选：QQ / 飞书）</h2>
+            <span class="muted">让 Agent 在手机上听你指挥</span>
+          </div>
+          <div class="kv">
+            <div><b>在哪儿启停</b><span>左侧「<b>远程通道</b>」页：每个通道一张卡，<code>▶ 启动</code> / <code>■ 停止</code> / 清空日志，日志直接内嵌在下面（不用再开黑色控制台窗口）</span></div>
+            <div><b>随 Agent 自动启动</b><span>点右上角「启动 Agent」时，<b>已填好配置</b>且勾了「随 Agent 自动启动」的通道会被一起唤醒；点「停止」或关窗口时一起关。开关存在 <code>AUTO_START_QQ_BOT</code>（默认 1）/ <code>AUTO_START_FEISHU_BOT</code>（默认 0）</span></div>
+            <div><b>QQ 通道（轻量，不用装机器人框架）</b><span>在 <code>q.qq.com</code> 建一个机器人 → 把 AppID / AppSecret 填进「配置 → QQ 机器人」→ 回「远程通道」页点启动（或双击 <code>启动QQ机器人.bat</code> 单独跑）</span></div>
+            <div><b>只认你自己</b><span><code>QQ_BOT_ALLOWED_USERS</code> 填你的 openid。留空时机器人会拒收所有指令，并把你的 openid 回给你 —— 先随便发一句抄进去再重启即可</span></div>
+            <div><b>在 QQ 里怎么用</b><span>群里 @机器人 或私聊发一句话（如「今天体力怎么花」）→ 出审批屏 → <b>点按钮 ✅ 执行 / 🧪 仅改配置 / 🚫 取消</b>（等价回复 <code>y</code> / <code>t</code> / <code>取消</code>），也可直接打字；<code>refresh</code> 刷展柜、<code>clear</code> 清记忆。手机上默认只发精简审批屏（<code>QQ_BOT_REPLY_MODE=compact</code>），完整推理在电脑端日志里</span></div>
+            <div><b>拿不到按钮权限？</b><span>消息按钮要平台【内邀开通】/【申请使用】；<b>单聊底部自定义菜单不需要</b>，跑一次 <code>python main.py qq --setup-menu</code> 就有「✅ 执行 / 🧪 测试 / 🚫 取消」</span></div>
+            <div><b>飞书通道</b><span>Webhook 模式，需要内网穿透 + 飞书开放平台配置。<b>默认不随 Agent 启动</b>（公网不可达时收不到消息，白占一个进程），需要就把 <code>AUTO_START_FEISHU_BOT</code> 设成 1</span></div>
+          </div>
+          <div class="hint">
+            两条通道共用同一套逻辑（规划 / 审批 / 配置事务 / 回滚提示），回复靠 <code>target</code> 前缀自动分发，
+            细节见 <code>docs/QQ_BOT.md</code>。⚠️ 官方限制：QQ 的被动回复凭据只有 5 分钟有效期 ——
+            审批屏发出后超过 5 分钟才回 <code>y</code>，回执会发不出去（重新发一句话就会开一段新的凭据）。
+          </div>
+        </div>
+
+        <div class="grid-2">
+          <div class="card">
+            <h2>四、常用命令</h2>
+            <div class="kv" id="guide-commands">
+              <div><b><code>双击 GI-Agent-Studio.exe</code></b><span>打开本界面（推荐）</span></div>
+              <div><b><code>python main.py</code></b><span>终端对话模式</span></div>
+              <div><b><code>python main.py qq</code></b><span>启动 QQ 机器人通道（<code>--check</code> 会取 token 并真连一次网关，验到 HELLO 才算通过）</span></div>
+              <div><b><code>python main.py studio</code></b><span>用命令行启动本界面</span></div>
+              <div><b><code>python main.py doctor</code></b><span>环境体检（只读）</span></div>
+              <div><b><code>python main.py repair</code></b><span>清理 Agent 加过又跑不起来的任务项、关掉 Boss 脚本的启动编辑器（<code>--force</code> 跳过运行中检查）</span></div>
+              <div><b><code>python main.py gui</code></b><span>旧版 tkinter 控制台（备用）</span></div>
+              <div><b><code>rollback &lt;事务ID&gt;</code></b><span>在对话里还原某次 BetterGI 配置改动</span></div>
+            </div>
+          </div>
+
+          <div class="card">
+            <h2>五、排错速查</h2>
+            <div class="faq">
+              <div><b>战斗策略文件不存在</b><span>组里配的策略名在 <code>User\AutoFight</code> 下没有对应 txt → 改成「根据队伍自动选择」，或把 txt 复制进去。体检会列出是哪几个组。</span></div>
+              <div><b>当前获取焦点的窗口不是原神</b><span>跑图时切了窗口，BetterGI 会暂停甚至中止 → 挂机时别动键鼠；把 <code>showStatusPanel</code> 关掉也能少一个抢焦点的悬浮窗。</span></div>
+              <div><b>停止任务时 BetterGI 闪退（0xc00000fd）</b><span>组里躺着大量 Disabled 路线导致日志爆发 → 保持 <code>BGI_ROUTE_GROUP_POLICY=shrink</code>（自动精简+归档）。</span></div>
+              <div><b>说「刷点XX」没反应</b><span>那个类目没有脚本组，或组没登记进一条龙 → 看「任务与路线」页，或跑一次体检。</span></div>
+              <div><b>讨伐前弹一个要手点"保存并关闭"的窗口</b><span>脚本自带的 BOSS 配置编辑器 → Agent 已把 <code>showEditorOnStart=false</code> 写进脚本组；想手动编辑就在 BetterGI 里右键脚本 →「修改JS脚本自定义配置」勾回来。</span></div>
+              <div><b>一条龙列表多了奇怪的任务（如 AutoBoss）</b><span>历史遗留的空转任务 → 关掉 BetterGI 后跑 <code>python main.py repair</code> 摘掉它。</span></div>
+              <div><b>展柜里查不到某个角色</b><span>先点「概览 → 刷新展柜」；还不行检查 <code>DEFAULT_UID</code> 与该角色是否真的在游戏展柜里。</span></div>
+              <div><b>Agent 说无法关闭 BetterGI</b><span>说明 <code>StopBetterGI</code> 计划任务没注册 → 以管理员身份跑一次 <code>setup_start_bettergi_task.ps1</code>，或手动关掉 BetterGI 再试。</span></div>
+              <div><b>QQ 里 @了机器人没反应</b><span>① 没申请「群聊/单聊消息」权限（intents 里的 <code>1&lt;&lt;25</code>）；② 白名单要填 <b>openid 而不是 QQ 号</b> —— 机器人会把你的 openid 回给你，抄进 <code>QQ_BOT_ALLOWED_USERS</code> 再重启；③ 先跑 <code>python main.py qq --check</code>（会一路验到网关握手）。</span></div>
+              <div><b>日志刷 <code>取网关失败：HTTP 426</code></b><span>取网关地址的路径不对（老版本问题，已修）：官方 v2 是 <code>GET /gateway</code>，<code>/websocket/</code> 是 WebSocket 入口本身，普通 GET 会被网关挡回来。现在会自动改走直连 <code>wss://api.sgroup.qq.com/websocket</code>，不影响使用。</span></div>
+              <div><b>QQ 机器人回一句就再没下文</b><span>被动回复凭据 5 分钟过期（官方限制）→ 重新发一句话；长回复会自动分段并按 <code>msg_seq</code> 递增发送。</span></div>
+              <div><b>QQ 审批屏没有按钮 / 点了转圈</b><span>按钮要在 QQ 开放平台开通（自定义按钮=内邀开通，模板按钮=申请使用），没开通会提示一次并自动退回纯文本；点了转圈说明 intents 少了互动事件位 <code>1&lt;&lt;26</code>（把 <code>QQ_BOT_INTENTS</code> 清空用默认值即可）。</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- ---------- 关于 ---------- -->
+      <div class="page hidden" data-page="about">
+        <div class="card">
+          <h2>GI Agent Studio</h2>
+          <p class="muted">
+            桌面程序：<code>GI-Agent-Studio.exe</code> 是原生窗口（WinForms + WebView2 控件），
+            不是浏览器窗口 —— 没有地址栏/标签页，任务栏里就是它自己；关掉窗口时后端会一起退出。
+            界面与后端（本地 Flask，只监听 <code>127.0.0.1</code>）都随 exe 启动，
+            它不重写 Agent 逻辑 —— <code>main.py</code> 仍是唯一的执行体，
+            Studio 只负责启动/停止/看日志/改配置。
+          </p>
+          <div class="kv" id="about-kv"></div>
+          <div class="hint">
+            旧版 tkinter 控制台仍保留为备用：<code>启动GI-Agent控制台.bat</code> 或 <code>python main.py gui</code>。
+            如果 WebView2 起不来，exe 会自动退回"浏览器应用窗口"模式（功能一样），细节见 <code>studio-host.log</code>。
+          </div>
+        </div>
+        <div class="card">
+          <h2>快捷键</h2>
+          <div class="kv">
+            <div><b>Enter</b><span>发送输入框内容</span></div>
+            <div><b>y / t / exit</b><span>审批（也可直接点上面的按钮）</span></div>
+            <div><b>Esc</b><span>关闭弹窗</span></div>
+          </div>
+        </div>
+      </div>
+
+    </section>
+  </main>
+</div>
+
+<!-- ============ 弹窗 ============ -->
+<div class="modal-mask hidden" id="modal-mask">
+  <div class="modal">
+    <div class="modal-head"><h3 id="modal-title">标题</h3><button class="btn ghost sm icon-btn" id="modal-close" title="关闭"><span data-icon="close"></span></button></div>
+    <div class="modal-body" id="modal-body"></div>
+    <div class="modal-foot" id="modal-foot"></div>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+<script src="app.js"></script>
+</body>
+</html>

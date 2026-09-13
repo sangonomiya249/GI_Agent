@@ -53,7 +53,13 @@ def list_transactions(backup_root: str | Path) -> list[dict[str, Any]]:
             )
         except (OSError, json.JSONDecodeError):
             continue
-    return sorted(transactions, key=lambda item: item["id"], reverse=True)
+    # ⚠️ 不能只按目录名倒序：目录里有 `20260912-121407-…`（事务）和 `recovery-<时间戳>`（恢复记录）
+    #    两种命名，字符串比较时 `recovery-…` 恒大于 `2026…` —— 体检会把"恢复记录"当成"最近事务"。
+    #    改成按 manifest 里的 created_at 排，缺时间戳的才退回目录名比较。
+    def sort_key(item):
+        return (str(item.get("created_at") or ""), str(item.get("id") or ""))
+
+    return sorted(transactions, key=sort_key, reverse=True)
 
 
 def load_transaction(backup_root: str | Path, transaction_id: str) -> tuple[Path, dict[str, Any]]:

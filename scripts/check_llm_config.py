@@ -1,12 +1,24 @@
 #!/usr/bin/env python3
 """
-测试脚本：验证新的 LLM 多提供商配置是否正确工作
+手工自检脚本：验证 LLM 多提供商配置是否正确工作（会真的发一次请求，会花钱）
+
+用法（在项目根目录）：python scripts/check_llm_config.py
+
+⚠️ 它**不是**单元测试（不会被 `python -m unittest` 收集），想跑测试请用：
+   venv\\Scripts\\python.exe -m unittest tests.test_env_config
+⚠️ 从 scripts/ 里跑时 `brain` 不在 sys.path 上，所以下面先把项目根加进去。
 """
 
 import os
+import sys
+
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
 from dotenv import load_dotenv
 
-load_dotenv()
+load_dotenv(os.path.join(PROJECT_ROOT, ".env"))
 
 print("="*60)
 print("🧪 LLM 配置系统测试")

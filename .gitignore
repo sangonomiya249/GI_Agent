@@ -39,6 +39,36 @@ Thumbs.db
 
 # Secrets
 .env
+.env.*
+!.env.example
+
+# 控制台本地状态（窗口尺寸等）
+.gui_state.json
+
+# 运行期日志：Studio 宿主 / 后端 / HTTP 访问日志（统一放 logs/，2MB 滚动）
+logs/
+# 旧位置（目录整理前留下的，免得历史文件被误提交）
+studio.log
+studio-access.log
+studio-host.log
+.studio-profile/
+.studio-lib/
+
+# PyInstaller
+*.spec
 
 # Local Agent Memory
+#   ⚠️ 这些是**你个人的运行数据**（对话记录 / 展柜快照 / 手记的采集冷却 …），
+#   里面会带 UID、角色、QQ 会话 id，绝对不要提交到 GitHub。
 memory/chat_context.json
+memory/agent_registered_tasks.json
+memory/qq_pending_notices.json
+memory/qq_bot.lock
+memory/mys_characters.json
+memory/gather_cooldown_manual.json
+memory/current_state.json
+memory/target_config.json
+
+# BetterGI 关闭流程的临时状态（scripts/stop_bettergi.ps1 使用）
+scripts/*.pids
+scripts/*.log

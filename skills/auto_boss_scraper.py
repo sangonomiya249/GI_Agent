@@ -9,6 +9,11 @@ import time
 import asyncio
 from typing import Dict, List, Tuple
 import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import config   # noqa: E402  （用 config.project_path 拼绝对路径，别依赖工作目录）
 
 # 所有BOSS的ID和名称（从页面列表提取）
 BOSS_LIST = [
@@ -166,13 +171,22 @@ def scrape_all_bosses():
     同步包装函数 - 爬取所有BOSS
     """
     boss_dict = asyncio.run(scrape_all_bosses_async())
-    
-    # 保存到JSON文件
-    output_path = "memory/boss_drops_dict.json"
+
+    # ⚠️ 保存前必须检查结果非空：这个文件是**运行期依赖**（char_boss_match / route_group 都读它），
+    #    没网 / 代理不通 / 百科改版导致一条都没抓到时会抓成 {}，直接覆写就把整份字典清空了，
+    #    之后"材料 → 首领"反查全废、Boss 任务还会以"该材料的突破材料不来自任何首领"这种错误原因失败。
+    output_path = config.project_path("memory", "boss_drops_dict.json")
+    if not boss_dict:
+        print("❌ 一条掉落都没抓到（没网 / 代理不通 / 百科改版？），**不覆盖**现有字典：", output_path)
+        return 1
+
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    
-    with open(output_path, 'w', encoding='utf-8') as f:
+
+    # 原子写：先写临时文件再替换，避免中途被打断留下半截 JSON
+    temp_path = f"{output_path}.tmp"
+    with open(temp_path, 'w', encoding='utf-8') as f:
         json.dump(boss_dict, f, ensure_ascii=False, indent=2)
+    os.replace(temp_path, output_path)
     
     # 打印摘要
     print(f"\n" + "=" * 70)
@@ -206,6 +220,8 @@ if __name__ == "__main__":
     
     try:
         boss_dict = scrape_all_bosses()
+        if boss_dict == 1:          # 一条都没抓到（函数返回 1 表示"没覆盖字典"）
+            raise SystemExit(1)
     except Exception as e:
         print(f"\n❌ 爬虫运行出错: {str(e)}")
         print("\n💡 建议:")
