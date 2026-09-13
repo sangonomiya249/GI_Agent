@@ -431,12 +431,13 @@ GI_Agent-main/
 
 ### 1. 环境准备
 - 操作系统：Windows 10/11 (或在 WSL 中运行)
-- 环境依赖：Python 3.8+ 
+- 环境依赖：Python **3.10+**（实测 3.10.11；`websockets 16` / `python-dotenv 1.2` / `requests 2.33`
+  都要求 ≥3.10，装到 3.9 上会在装依赖这一步就失败）
 - 前置软件：[BetterGI](https://github.com/letieu/BetterGI) (已完成上述前置配置)
 
 ### 2. 安装项目
 ```bash
-git clone https://github.com/box-opener/GI_Agent.git
+git clone https://github.com/sangonomiya249/GI_Agent.git
 
 # cd是重要的，因为一些路径会涉及到这个问题，请确保你cd了这个路径
 cd GI_Agent
