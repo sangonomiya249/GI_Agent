@@ -63,7 +63,7 @@ function renderIcons() {
 const PAGE_META = {
   dashboard: ["概览", "一眼看清 Agent、BetterGI 与今天的路线状态"],
   run: ["运行", "启动 Agent、审批方案、看实时日志"],
-  cooldown: ["采集冷却", "地区特产 48 小时刷新：谁还在冷却、还要等多久"],
+  cooldown: ["资源冷却", "特产 48h / 矿物 72h / 食材 24h / 魔物 12h：谁还在冷却、还要等多久"],
   routes: ["任务与路线", "调度器脚本组、战斗策略与各类目路线"],
   channels: ["远程通道", "QQ 机器人 / 飞书服务端：内嵌启停与日志，可随 Agent 自动启动"],
   config: ["配置", "图形化编辑 .env（保留注释，自动备份）"],
@@ -585,12 +585,13 @@ function hoursText(hours) {
 }
 
 function cooldownStatusTag(row) {
-  if (!row.known) return `<span class="tag ok">可以采</span><span class="tag dim">没有记录</span>`;
-  if (row.partial) return `<span class="tag ok">可以采</span><span class="tag warn">部分采集</span>`;
   if (row.cooling) return `<span class="tag warn"><span class="status-icon">${ICONS.clock}</span>冷却中 · 还要 ${escapeHtml(hoursText(row.hours_left))}</span>`;
-  return `<span class="tag ok">可以采</span>`;
+  if (row.partial) return `<span class="tag ok">可以去</span><span class="tag warn">部分完成</span>`;
+  if (!row.known) return `<span class="tag ok">可以去</span><span class="tag dim">没有记录</span>`;
+  return `<span class="tag ok">可以去</span>`;
 }
 
+/** 一个类别里的行；没有匹配的返回 null（好让调用方整块跳过）。 */
 function cooldownRows(rows) {
   const keyword = (state.cooldownSearch || "").trim();
   const onlyCooling = Boolean(state.cooldownOnlyCooling);
@@ -598,9 +599,7 @@ function cooldownRows(rows) {
     if (onlyCooling && !row.cooling) return false;
     return !keyword || row.material.includes(keyword);
   });
-  if (!filtered.length) {
-    return `<tr><td colspan="5"><div class="empty">没有匹配的材料${onlyCooling ? "（试试取消「只看冷却中」）" : ""}</div></td></tr>`;
-  }
+  if (!filtered.length) return null;
   return filtered.map((row) => {
     const routes = row.total_routes
       ? `${row.ran_routes}/${row.total_routes} 条`
@@ -615,11 +614,39 @@ function cooldownRows(rows) {
       <td>${last}</td>
       <td>${routes}</td>
       <td><div class="row-actions tight">
-        <button class="btn ghost sm" data-cool-mark="${escapeHtml(row.material)}">记为刚采过</button>
+        <button class="btn ghost sm" data-cool-mark="${escapeHtml(row.material)}">记为刚刷过</button>
         <button class="btn ghost sm" data-cool-clear="${escapeHtml(row.material)}"${row.known ? "" : " disabled"}>清除</button>
       </div></td>
     </tr>`;
   }).join("");
+}
+
+/** 表格体：按类别分块（地区特产 / 矿物 / 食材与炼金 / 敌人与魔物），每块一个小标题行。 */
+function cooldownTableBody(sections) {
+  const keyword = (state.cooldownSearch || "").trim();
+  const onlyCooling = Boolean(state.cooldownOnlyCooling);
+  const blocks = [];
+  for (const section of sections) {
+    const all = section.materials || [];
+    const rows = cooldownRows(all);
+    if (!rows) continue;                                  // 这个类别里没有匹配的
+    const summary = section.summary || {};
+    const shown = (rows.match(/<tr>/g) || []).length;
+    const hidden = all.length - shown;
+    blocks.push(`<tr class="table-group"><td colspan="5">
+      <b>${escapeHtml(section.label)}</b>
+      <span class="muted">刷新 ${section.hours} 小时 · 冷却中 ${summary.cooling || 0}／共 ${summary.total || 0}${hidden > 0 ? ` · 筛选隐藏 ${hidden}` : ""}</span>
+      <div class="muted">${escapeHtml(section.note || "")}</div>
+    </td></tr>`);
+    blocks.push(rows);
+  }
+  if (!blocks.length) {
+    const what = onlyCooling
+      ? "没有冷却中的目标（取消「只看冷却中」看看全部）"
+      : (keyword ? `没有匹配「${escapeHtml(keyword)}」的目标` : "还没有可显示的目标");
+    return `<tr><td colspan="5"><div class="empty">${what}</div></td></tr>`;
+  }
+  return blocks.join("");
 }
 
 function renderCooldown(data) {
@@ -631,30 +658,33 @@ function renderCooldown(data) {
   }
   state.cooldown = data;
   const summary = data.summary || {};
-  $("#cooldown-cards").innerHTML = [
-    statCard({
-      label: "冷却中", value: `${summary.cooling || 0} 种`, tone: (summary.cooling ? "warn" : ""),
-      sub: `共 ${summary.total || 0} 种材料 · 刷新时长 ${data.hours} 小时`, icon: "clock",
-    }),
-    statCard({
-      label: "可以采", value: `${summary.ready || 0} 种`, tone: "ok",
-      sub: `部分采集 ${summary.partial || 0} 种（不算采完，照常排期）`, icon: "leaf",
-    }),
-    statCard({
-      label: "手动登记", value: `${summary.manual || 0} 种`,
-      sub: "游戏里自己采过的，记一笔就进冷却", icon: "file",
-    }),
-    statCard({
-      label: "判定依据", value: data.band_enabled ? "按路线比例" : "正常冷却",
-      sub: `隔离带${data.band_enabled ? "开" : "关"} · 门槛 ${data.min_route_percent}% · 扫了 ${data.scanned_days} 天日志`,
-      icon: "pulse",
-    }),
-  ].join("");
+  const sections = data.sections || [];
+  const icons = { specialty: "leaf", mine: "map", cook: "book", hunt: "spark" };
+
+  // 每个类别一张卡（"分好区"），最后一张放判定依据
+  const cards = sections.map((section) => {
+    const stats = section.summary || {};
+    return statCard({
+      label: section.label,
+      value: `${stats.cooling || 0} 冷却中`,
+      tone: stats.cooling ? "warn" : "ok",
+      sub: `共 ${stats.total || 0} 项 · 刷新 ${section.hours} 小时${stats.partial ? ` · 部分完成 ${stats.partial}` : ""}`,
+      icon: icons[section.key] || "leaf",
+    });
+  });
+  cards.push(statCard({
+    label: "判定依据",
+    value: data.band_enabled ? "按路线比例" : "正常冷却",
+    sub: `隔离带${data.band_enabled ? "开" : "关"} · 门槛 ${data.min_route_percent}% · 扫了 ${data.scanned_days} 天日志 · 共 ${summary.total || 0} 项`,
+    icon: "pulse",
+  }));
+  $("#cooldown-cards").innerHTML = cards.join("");
+
   $("#cooldown-table").innerHTML = `<thead><tr>
-      <th>材料</th><th>状态</th><th>上次采集</th><th>路线</th><th>操作</th>
-    </tr></thead><tbody>${cooldownRows(data.materials || [])}</tbody>`;
+      <th>目标</th><th>状态</th><th>上次</th><th>路线</th><th>操作</th>
+    </tr></thead><tbody>${cooldownTableBody(sections)}</tbody>`;
   $("#cooldown-hint").textContent =
-    `${data.generated_at} 读取 · 日志事件 ${data.events} 条 · 点了「刷新」可以随时重算`;
+    `${data.generated_at} 读取 · 日志事件 ${data.events} 条 · 冷却中 ${summary.cooling || 0}／${summary.total || 0} · 点「刷新」可以随时重算`;
 }
 
 async function loadCooldown() {

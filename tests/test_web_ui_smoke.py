@@ -51,15 +51,17 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertNotIn("❌", result.stdout)
 
     def test_app_js_renders_the_cooldown_page(self):
-        """「采集冷却」页：切过去要能真渲染出汇总卡与表格（含"还要等多久"和操作按钮）。"""
+        """「采集冷却」页：切过去要能真渲染出**分类**汇总卡与分区表格。"""
         result = self._run(str(HARNESS))
 
         self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
         for line in (
-            "✅ 采集冷却：汇总卡渲染出来了",
-            "✅ 采集冷却：冷却中的材料带剩余时间",
-            "✅ 采集冷却：部分采集标注出来了",
-            "✅ 采集冷却：没有记录的按可以采显示",
+            "✅ 采集冷却：每个类别一张卡（特产/矿物/魔物都在）",
+            "✅ 采集冷却：卡片写明各类刷新时长",
+            "✅ 采集冷却：表格按类别分区（有小标题行）",
+            "✅ 采集冷却：冷却中的目标带剩余时间",
+            "✅ 采集冷却：部分完成标注出来了",
+            "✅ 采集冷却：没有记录的显示可以去",
             "✅ 采集冷却：每行都有登记/清除按钮",
         ):
             self.assertIn(line, result.stdout)
@@ -117,6 +119,8 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertIn("/api/cooldown", js)
         self.assertIn("cooldown: [", js)          # PAGE_META 里有这一页，标题栏才对
         self.assertIn("loadCooldown", js)
+        self.assertIn("table-group", js)          # 表格按类别分区
+        self.assertIn("table-group", (PROJECT_ROOT / "studio" / "web" / "app.css").read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

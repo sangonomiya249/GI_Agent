@@ -322,11 +322,13 @@ class EmptyPlanGuardTests(unittest.TestCase):
         self.assertIn("已跳过启动", sent)
 
     def test_all_targets_on_cooldown_skip_the_launch(self):
-        """点名的采集物都在 48 小时冷却里 → 也不该白开一次 BGI。"""
+        """点名的采集物都在冷却里 → 也不该白开一次 BGI。"""
         with patch.object(
             bgi_controller,
-            "_filter_gather_cooldown",
-            lambda items, force=False: ([], ["⏳ 「霜仙花」还在冷却中（约 20.0 小时后刷新）"]),
+            "_filter_cooldown",
+            lambda items, force=False, category=None: (
+                [], ["⏳ 「霜仙花」还在冷却中（约 20.0 小时后刷新）"]
+            ),
         ):
             launch, notice, _feishu = self._run(
                 {"free_task": [{"action": "gather", "target": "霜仙花"}]}
@@ -362,8 +364,8 @@ class EmptyPlanGuardTests(unittest.TestCase):
             )
         with patch.object(
             bgi_controller,
-            "_filter_gather_cooldown",
-            lambda items, force=False: (list(items), []),
+            "_filter_cooldown",
+            lambda items, force=False, category=None: (list(items), []),
         ):
             launch, _notice, _feishu = self._run(
                 {"free_task": [{"action": "gather", "target": "霜仙花"}]}

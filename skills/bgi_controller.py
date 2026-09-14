@@ -409,19 +409,24 @@ def ensure_bettergi_closed(open_id):
 _ROUND_LOCK = threading.Lock()
 
 
-def _filter_gather_cooldown(items, force=False):
-    """把采集目标里"还在 48 小时冷却里"的挑出来。返回 (保留的目标, 说明行)。
+def _filter_cooldown(items, force=False, category=None):
+    """把目标里"还在冷却中"的挑出来。返回 (保留的目标, 说明行)。
 
-    · 目标是材料名（「霜仙花」）→ 直接查冷却；
+    四类资源各有各的刷新时长（特产 48 / 矿物 72（按材料还分档）/ 食材 24 / 魔物 12，
+    见 `skills/gather_cooldown`），所以这里对**所有类别**统一过一遍：
+    不这样做的后果是"刷怪 / 挖矿 / 采食材"永远不查冷却，白跑一趟。
+
+    · 目标是材料名 / 魔物名（「霜仙花」「蕈兽」）→ 直接查冷却；
     · 目标是角色名（「蓝砚」「奥黛塔的突破材料」）→ 先解析成 TA 的采集物再查；
     · 解析不出来的目标**保留**（交给下游按老逻辑处理：找不到路线会提示玩家），
       但会在说明里写清楚"认不出"，免得静默消失；
-    · `force=True`（玩家说了「强制采集」）→ 全部保留，只把状态写进说明。
+    · `force=True`（玩家说了「强制采集 / 强制跑」）→ 全部保留，只把状态写进说明；
+    · `category`：只在这个类别里解析目标（例如刷怪时别把「蕈兽」当特产去查）。
     """
     try:
         from skills import gather_cooldown
     except Exception as exc:        # noqa: BLE001
-        print(f"⚠️ 采集冷却检查不可用（跳过）：{exc}")
+        print(f"⚠️ 冷却检查不可用（跳过）：{exc}")
         return list(items), []
 
     kept, notices = [], []
@@ -429,7 +434,7 @@ def _filter_gather_cooldown(items, force=False):
         target = str(item or "").strip()
         if not target:
             continue
-        material, note = gather_cooldown.resolve_material(target)
+        material, note = gather_cooldown.resolve_material(target, category=category)
         if not material:
             kept.append(item)
             notices.append(f"⚠️ 「{target}」：{note}")
@@ -438,12 +443,16 @@ def _filter_gather_cooldown(items, force=False):
         if result["cooling"]:
             if force:
                 kept.append(item)
-                notices.append(gather_cooldown.describe(result) + "（你要求强制采集，照跑）")
+                notices.append(gather_cooldown.describe(result) + "（你要求强制，照跑）")
             else:
                 notices.append(gather_cooldown.describe(result))
             continue
         kept.append(item)
     return kept, notices
+
+
+# 兼容老名字（老代码/老测试里叫 _filter_gather_cooldown）
+_filter_gather_cooldown = _filter_cooldown
 
 
 def focus_game_for_launch():
@@ -1760,34 +1769,34 @@ def _execute_bgi_task_locked(bgi_cmd, decision_lower, store, open_id, uid):
                     print(f"⚠️ 自动建组写盘失败：{exc}")
 
             # 🌟 覆写地图素材（地方特产路线）
-            #    ⚠️ 先过一遍**采集物 48 小时冷却**：地区特产采完 48 小时才刷新，
-            #    48 小时内采过的材料这次不排（否则就是白跑一趟）。
+            #    ⚠️ 先过一遍**冷却**：地区特产采完 48 小时才刷新，
+            #    冷却内采过的材料这次不排（否则就是白跑一趟）。
             #    数据来自 BetterGI 自己的日志（所以玩家手动跑过的也算），见 skills/gather_cooldown.py。
             cooldown_blocked = []
             requested_gather = [str(x) for x in gather_items if x]
+            force_any = bool(bgi_cmd.get("force_gather")) or bool(bgi_cmd.get("force"))
             if gather_items:
-                force_gather = bool(bgi_cmd.get("force_gather")) or bool(bgi_cmd.get("force"))
-                kept_items, cooldown_lines = _filter_gather_cooldown(
-                    gather_items, force=force_gather
+                kept_items, cooldown_lines = _filter_cooldown(
+                    gather_items, force=force_any, category="specialty"
                 )
                 cooldown_blocked = [line for line in cooldown_lines if line.startswith("⏳")]
                 if cooldown_lines:
-                    print("⏳ 采集物冷却检查：\n   " + "\n   ".join(cooldown_lines))
-                if cooldown_blocked and not force_gather:
+                    print("⏳ 地区特产冷却检查：\n   " + "\n   ".join(cooldown_lines))
+                if cooldown_blocked and not force_any:
                     send_notice(
                         open_id,
-                        "⏳ 这些采集物还没刷新，本次不采：\n　 "
+                        "⏳ 这些特产还没刷新，本次不采：\n　 "
                         + "\n　 ".join(cooldown_blocked)
                         + "\n　 （想强跑就说「强制采集」；游戏里自己采过的可以登记："
                         "python -m skills.gather_cooldown --manual 霜仙花）",
                     )
                 gather_items = kept_items
                 if requested_gather and not gather_items:
-                    # 点名的采集物全在 48 小时冷却里 → 本轮确实一个路线都不会跑，
+                    # 点名的特产全在冷却里 → 本轮确实一个路线都不会跑，
                     # 记一笔，让下面的"空计划保护"拦住这次冷启动（否则 BGI 只会
                     # 打印 `没有配置,退出执行!` 然后退出，白开一次）。
                     empty_notes.append(
-                        f"⏳ 「{'、'.join(requested_gather)}」都还在 48 小时冷却里，没有可跑的采集路线。"
+                        f"⏳ 「{'、'.join(requested_gather)}」都还在冷却里，没有可跑的特产路线。"
                     )
 
             if gather_items:
@@ -1823,12 +1832,41 @@ def _execute_bgi_task_locked(bgi_cmd, decision_lower, store, open_id, uid):
             # 玩家说"刷点花蜜/打点蕈兽"时开对应敌人的怪点；说"锄大地"时开锄地专区的扫图路线。
             # 两类用目录前缀严格隔离，路线名重合也不会互相抢（见 route_group.is_foreign_project）。
             # 小组优先；只有找不到小组才用该类目的总组，超大组按策略精简/拒绝/放行。
+            #
+            # ⚠️ 这些类别**也要过冷却**（2026-09 补）：矿物 72（按材料还分档）、食材 24、
+            #    魔物 12 小时 —— 只查特产的话，"刷怪/挖矿"会白跑一趟。
+            #    锄大地（hoe）不查：它是"按地区扫图"，没有单一材料可对应。
             for spec in route_group.category_specs().values():
                 items = [x for x in category_items.get(spec.action, []) if x]
                 if not items:
                     # 只关 agent 自己那个总组，别的按目标分的组由玩家自己管
                     set_task_enabled(bgi_config, False, (os.path.splitext(spec.group_filename)[0],))
                     continue
+                if spec.action in ("hunt", "mine", "cook"):
+                    requested_items = list(items)
+                    items, category_lines = _filter_cooldown(
+                        items, force=force_any, category=spec.action
+                    )
+                    blocked = [line for line in category_lines if line.startswith("⏳")]
+                    if category_lines:
+                        print(f"⏳ {spec.label}冷却检查：\n   " + "\n   ".join(category_lines))
+                    if blocked and not force_any:
+                        send_notice(
+                            open_id,
+                            f"⏳ 这些{spec.label}目标还没刷新，本次不跑：\n　 "
+                            + "\n　 ".join(blocked)
+                            + "\n　 （想强跑就说「强制下」；也可以在 Studio「资源冷却」页登记一笔）",
+                        )
+                    if not items:
+                        # 全在冷却里 → 这一类没什么可跑的，交给"空计划保护"
+                        empty_notes.append(
+                            f"⏳ 「{'、'.join(str(x) for x in requested_items)}」都还在冷却里"
+                            f"（{spec.label}），没有可跑的路线。"
+                        )
+                        set_task_enabled(
+                            bgi_config, False, (os.path.splitext(spec.group_filename)[0],)
+                        )
+                        continue
                 for category_result in _apply_category_groups(bgi_config, items, spec):
                     if category_result.get("warning"):
                         print(category_result["warning"])

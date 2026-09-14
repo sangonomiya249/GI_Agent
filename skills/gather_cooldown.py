@@ -1,4 +1,19 @@
-"""地区特产（采集物）的 48 小时刷新冷却检测。
+"""世界资源（采集物 / 矿物 / 食材 / 魔物）的刷新冷却检测。
+
+## 四类资源、四套刷新规则
+
+实测（bilibili wiki「新手教程 · 采集物刷新时间」原文 + 玩家脚本组）：
+
+| 类别 | 刷新规则（原文摘要） | 默认值 |
+| --- | --- | --- |
+| 地区特产 | 「特产…在采集后经过 48 小时刷新」 | 48 小时 |
+| 矿物 | 精锻用矿石按档：铁块/白铁块「上次刷新后的次日」、星银矿石「第二日」、水晶块/紫晶块「第三日」（服务器 0 点）；魔晶块「每天 6 点」 | 24 / 48 / 72 小时 |
+| 食材与炼金 | 「大部分食材…每日凌晨 0 点刷新」 | 24 小时（近似：按"距上次 24 小时"判，不追服务器 0 点） |
+| 敌人与魔物 | 动物/晶蝶类「当天采集后 12 小时刷新以及凌晨四点刷新」；普通魔物社区通行说法也是 12 小时 | 12 小时 |
+
+来源：<https://wiki.biligame.com/ys/新手教程>（社区维护的 wiki，非官方数值）。
+四个时长都能在 Studio「配置」页 / `.env` 里改；矿物还能**按材料逐条覆盖**
+（`MATERIAL_HOURS`，例如星银矿石 48、水晶块 72）。
 
 ## 数据从哪来（为什么不自己记账）
 
@@ -11,18 +26,19 @@ BetterGI 每跑完一条地图追踪路线都会打一行：
 所以"哪种材料、什么时候采的"完全可以确定性地从日志里读出来 —— 而且是**唯一**能覆盖
 "玩家自己在 BetterGI 里手动跑"的证据（自己记账本会漏掉手动跑的那些）。
 
+**类别**由这条路线挂在哪个脚本组决定（地图素材 → 特产、矿物 → 矿物、食材与炼金 → 食材、
+敌人与魔物 → 魔物）—— 组名就是玩家自己分的类，比任何字典都准。
+
 两个细节：
   · **失败不算**：紧邻上文有「此追踪脚本未正常走完！」或「任务执行失败」的那条不计入冷却
     （实测玩家日志里 `04-便携轴承-…` 被停止快捷键打断时就是这种）；
   · **跨自然日**：BetterGI 的日志按天切文件（`better-genshin-impactYYYYMMDD.log`），
-    48 小时会横跨 3 个文件，所以按天往前扫（默认扫 `ceil(冷却小时/24)+1` 天）。
+    冷却可能横跨多个文件，所以按天往前扫（默认扫 `ceil(最长冷却小时/24)+1` 天）。
 
 ## 冷却规则
 
-地区特产 48 小时刷新（`GATHER_COOLDOWN_HOURS`，可用 .env 调）。所以：
-
-  · 上次采集距今 ≥ 48 小时 → **刷新了**，正常执行；
-  · 还在 48 小时内 → **没刷新**，本次不采集，并告诉玩家还要等多久、上次是什么时候采的。
+上次采集距今 ≥ 这种材料/类别的冷却时长 → **刷新了**，正常执行；还在冷却里 → **本次不排它**，
+并告诉玩家还要等多久、上次什么时候采的。
 
 玩家在游戏里手动采过、日志里没有的，可以 `python -m skills.gather_cooldown --manual 霜仙花`
 记一笔（写进 `memory/gather_cooldown_manual.json`）；临时想强跑一次，说「强制采集」即可
@@ -64,22 +80,104 @@ _ROUTE_TOTALS_CACHE_KEY = {"key": None}
 _ROUTE_TOTALS_FILE = {"path": ""}
 
 
+# ==========================================
+# 🌟 冷却类别（四类资源、四套刷新规则）
+# ==========================================
+
+CATEGORY_SPECIALTY = "specialty"
+CATEGORY_MINE = "mine"
+CATEGORY_COOK = "cook"
+CATEGORY_HUNT = "hunt"
+CATEGORY_ORDER = (CATEGORY_SPECIALTY, CATEGORY_MINE, CATEGORY_COOK, CATEGORY_HUNT)
+
+CATEGORY_LABELS = {
+    CATEGORY_SPECIALTY: "地区特产",
+    CATEGORY_MINE: "矿物",
+    CATEGORY_COOK: "食材与炼金",
+    CATEGORY_HUNT: "敌人与魔物",
+}
+# 默认冷却时长（小时）—— 来源见模块开头的表；都能在 .env / Studio 配置页改
+CATEGORY_DEFAULT_HOURS = {
+    CATEGORY_SPECIALTY: 48,
+    CATEGORY_MINE: 72,
+    CATEGORY_COOK: 24,
+    CATEGORY_HUNT: 12,
+}
+# 类别 → 读哪个 .env 键（老键 GATHER_COOLDOWN_HOURS 继续当"地区特产"的时长，保持兼容）
+CATEGORY_ENV_KEYS = {
+    CATEGORY_SPECIALTY: "GATHER_COOLDOWN_HOURS",
+    CATEGORY_MINE: "MINE_COOLDOWN_HOURS",
+    CATEGORY_COOK: "COOK_COOLDOWN_HOURS",
+    CATEGORY_HUNT: "HUNT_COOLDOWN_HOURS",
+}
+# 类别 → 这个类别的路线来自哪个脚本组（玩家自己的分组就是最可靠的分类依据）
+CATEGORY_CONFIG_KEYS = {
+    CATEGORY_SPECIALTY: "BGI_MAP_CONFIG",
+    CATEGORY_MINE: "BGI_MINE_CONFIG",
+    CATEGORY_COOK: "BGI_COOK_CONFIG",
+    CATEGORY_HUNT: "BGI_ENEMY_CONFIG",
+}
+# 依据（给 Studio 页面当脚注用，别让人以为这些数字是官方给的）
+CATEGORY_NOTES = {
+    CATEGORY_SPECIALTY: "游戏里标【XX区域特产】的材料；wiki：采集后 48 小时刷新",
+    CATEGORY_MINE: "精锻用矿石按档：铁/白铁→次日、星银→第二日、水晶/紫晶→第三日（服务器 0 点）；魔晶块每天 6 点",
+    CATEGORY_COOK: "大部分食材每日凌晨 0 点刷新（这里按「距上次 24 小时」近似）",
+    CATEGORY_HUNT: "普通魔物击败后 12 小时刷新（wiki 明确写了动物/晶蝶类 12 小时+凌晨 4 点）",
+}
+# 矿物按材料分档（wiki 的矿石刷新表）。这里没有的矿物用类别默认 72 小时。
+MATERIAL_HOURS = {
+    "铁块": 24, "白铁块": 24,          # 「上次刷新后的次日」
+    "星银矿石": 48,                     # 「第二日」
+    "水晶块": 72, "紫晶块": 72,          # 「第三日」
+    "魔晶块": 24,                       # 「每天 6 点」
+    "电气水晶": 48,                     # wiki 把它归在「特产、元素物质…48 小时」
+    # 夜泊石 / 石珀 属于矿石点（wiki 把它们列在"矿石破坏后掉落"里），按矿物默认 72 小时
+    "夜泊石": 72, "石珀": 72,
+}
+
+
+def category_default_hours(category):
+    """类别的默认冷却时长（小时）。"""
+    return CATEGORY_DEFAULT_HOURS.get(str(category or ""), CATEGORY_DEFAULT_HOURS[CATEGORY_SPECIALTY])
+
+
+def category_hours(category, now=None):
+    """类别的实际冷却时长：优先 `.env` 里那个键，其次默认值。"""
+    env_key = CATEGORY_ENV_KEYS.get(str(category or ""))
+    if not env_key:
+        return category_default_hours(category)
+    value = getattr(config, env_key, None)
+    if value is None:
+        return category_default_hours(category)
+    try:
+        hours = int(value)
+    except (TypeError, ValueError):
+        return category_default_hours(category)
+    return hours if hours > 0 else category_default_hours(category)
+
+
 def cooldown_hours():
-    return getattr(config, "GATHER_COOLDOWN_HOURS", 48)
+    """地区特产的冷却时长（老接口，保持兼容）。"""
+    return category_hours(CATEGORY_SPECIALTY)
+
+
+def max_cooldown_hours():
+    """所有类别里最长的冷却（决定"往前扫几天日志"）。"""
+    return max(category_hours(item) for item in CATEGORY_ORDER)
 
 
 def scan_days():
-    """要往前扫几天日志（48 小时横跨 3 个自然日）。"""
-    return int(cooldown_hours() // 24) + 1
+    """要往前扫几天日志（最长冷却 72 小时横跨 4 个自然日）。"""
+    return int(max_cooldown_hours() // 24) + 1
+
+
+# ==========================================
+# 🌟 手动登记 / 日志解析
+# ==========================================
 
 
 def manual_state_path():
     return config.project_path("memory", "gather_cooldown_manual.json")
-
-
-# ==========================================
-# 🌟 日志解析
-# ==========================================
 
 
 def log_paths(days=None):
@@ -258,8 +356,8 @@ def route_totals():
     """
     candidates = _collect_group_paths()
     key = tuple(
-        (path, (os.path.getmtime(path) if os.path.isfile(path) else None))
-        for path in candidates
+        (category, path, (os.path.getmtime(path) if os.path.isfile(path) else None))
+        for category, path in candidates
     )
     if _ROUTE_TOTALS_CACHE_KEY.get("key") == key:
         return _ROUTE_TOTALS
@@ -270,7 +368,7 @@ def route_totals():
     except Exception:        # noqa: BLE001
         return _ROUTE_TOTALS
 
-    for path in candidates:
+    for _category, path in candidates:
         if not path or not os.path.isfile(path):
             continue
         group = route_group.load_group(path) or {}
@@ -288,7 +386,7 @@ def route_totals():
 def session_routes(material, latest, window_hours=3, events=None):
     """上一次"采集那一趟"里，这种材料成功跑完的**不同路线**数（去重）。
 
-    `events` 可以直接传进来复用（Studio 的采集冷却页要一次算几十种材料，
+    `events` 可以直接传进来复用（Studio 的资源冷却页要一次算几十种材料，
     每个都重扫一遍日志会慢几十倍 —— 见 `overview()`）。
     """
     if latest is None:
@@ -324,24 +422,32 @@ def band_enabled():
 
 
 def status(material, now=None, events=None):
-    """单种材料的冷却状态。
+    """单种材料（或魔物）的冷却状态。
 
-    返回 {material, last_at, hours_ago, hours_left, cooling, known, total_routes, ran_routes,
-          partial, manual}
-      · cooling=True → 还在冷却，不该采集；
-      · known=False  → 没有任何采集记录（当作"刷新了"，可以采）；
+    返回 {material, category, category_label, hours, last_at, hours_ago, hours_left, cooling,
+          known, total_routes, ran_routes, partial, manual}
+      · cooling=True → 还在冷却，不该刷；
+      · known=False  → 没有任何记录（当作"刷新了"，可以去）；
       · partial=True → 上次只跑了这种材料的一部分路线（多半是**防闪退隔离带**顺带跑的，
-                       或中途停了）→ **不算采完**，可以继续采。
+                       或中途停了）→ **不算跑完**，可以继续；
                        只在隔离带开着时才会判（关掉隔离带就是"正常冷却"）。
-      · manual=True  → 这次记录来自**手动登记**（游戏里自己采的），不算"部分采集"。
+      · manual=True  → 这次记录来自**手动登记**（游戏里自己跑过的），不算"部分采集"。
+
+    冷却时长按**材料**定：矿物还按材料分档（铁块 24 / 星银矿石 48 / 水晶块 72…），
+    见 `hours_for()`；类别由脚本组决定，见 `category_of()`。
 
     `events` 可以直接传进来复用（见 `overview()`）。
     """
     now = now or datetime.datetime.now()
     material = str(material or "").strip()
+    category = category_of(material)
+    hours = hours_for(material, category)
     last = last_collected(material, events=events)
     result = {
         "material": material,
+        "category": category,
+        "category_label": CATEGORY_LABELS.get(category, category),
+        "hours": hours,
         "last_at": None,
         "hours_ago": None,
         "hours_left": 0.0,
@@ -356,7 +462,7 @@ def status(material, now=None, events=None):
         return result
 
     elapsed = (now - last).total_seconds() / 3600
-    left = cooldown_hours() - elapsed
+    left = hours - elapsed
     total = result["total_routes"]
     ran = session_routes(material, last, events=events)
     # 🌟 手动登记（`--manual 霜仙花`）= 玩家明确说"这种材料我刚采过了"，
@@ -382,22 +488,54 @@ def status(material, now=None, events=None):
         "ran_routes": ran,
         "partial": partial,
         "manual": from_manual,
-        # 只跑了一部分 → 还有没采的，不算冷却（否则会白等 48 小时）
+        # 只跑了一部分 → 还有没跑的，不算冷却（否则会白等一个刷新周期）
         "cooling": left > 0 and not partial,
     })
     return result
 
 
-def overview(now=None):
-    """一次算出**全部材料**的冷却状态（Studio 的「采集冷却」页 / CLI 都用它）。
+def category_sections(rows):
+    """把 `status()` 的结果按类别分组（Studio 页面 / CLI 都用它排版）。
 
-    为什么要单独一个函数：`status()` 内部会扫日志，几十种材料各扫一遍就是几十倍的
-    重复 IO（实测 62 种材料在地图素材这种大组上要好几秒）。这里把日志解析一次，
+    返回 [{key, label, hours, note, materials:[...], summary:{...}}]，顺序固定为
+    地区特产 → 矿物 → 食材与炼金 → 敌人与魔物；每个类别内部：**冷却中的在前**。
+    """
+    sections = []
+    for category in CATEGORY_ORDER:
+        items = [row for row in rows if row.get("category") == category]
+        if not items:
+            continue
+        items.sort(key=lambda row: (
+            not row["cooling"], row["hours_left"], -(row["total_routes"] or 0), row["material"],
+        ))
+        sections.append({
+            "key": category,
+            "label": CATEGORY_LABELS.get(category, category),
+            "hours": category_hours(category),
+            "default_hours": category_default_hours(category),
+            "note": CATEGORY_NOTES.get(category, ""),
+            "materials": items,
+            "summary": {
+                "total": len(items),
+                "cooling": sum(1 for row in items if row["cooling"]),
+                "ready": sum(1 for row in items if not row["cooling"]),
+                "partial": sum(1 for row in items if row["partial"]),
+                "manual": sum(1 for row in items if row["manual"]),
+            },
+        })
+    return sections
+
+
+def overview(now=None):
+    """一次算出**四类资源全部材料**的冷却状态（Studio 的「资源冷却」页 / CLI 都用它）。
+
+    为什么要单独一个函数：`status()` 内部会扫日志，上百种材料各扫一遍就是上百倍的
+    重复 IO（实测 60+ 种材料在地图素材这种大组上要好几秒）。这里把日志解析一次，
     再逐个算状态。
 
-    返回 {now, hours, min_route_percent, band_enabled, scanned_days, events,
-          summary:{total, cooling, ready, partial, manual}, materials:[status...]}
-    排序：**冷却中的在前**（按"快刷新了"排），其余按最近采过的时间倒序、再按名字。
+    返回 {now, hours（兼容字段=特产时长）, category_hours, min_route_percent, band_enabled,
+          scanned_days, events, summary, sections:[按类别分组], materials:[平铺、冷却在前],
+          totals}
     """
     now = now or datetime.datetime.now()
     events = scan_events()
@@ -405,10 +543,6 @@ def overview(now=None):
     manual = load_manual()
 
     names = set(route_material_vocabulary()) | set(manual)
-    # ⚠️ 故意**不**把日志里出现的每一种"材料"都列出来：日志里的路线还包括敌人与魔物组的
-    #    （巡陆艇、蕈兽…），它们不是 48 小时刷新的特产，混进来会让这页变成一锅粥。
-    #    这也和 `cooling_materials()`（喂给大模型的那份）保持一致。
-
     rows = [status(name, now=now, events=events) for name in sorted(names)]
     rows.sort(key=lambda row: (not row["cooling"], row["hours_left"], -(row["total_routes"] or 0), row["material"]))
 
@@ -422,12 +556,15 @@ def overview(now=None):
     }
     return {
         "now": now,
-        "hours": cooldown_hours(),
+        # 兼容老字段：页面/测试里用过的 hours（= 地区特产时长）
+        "hours": category_hours(CATEGORY_SPECIALTY),
+        "category_hours": {item: category_hours(item) for item in CATEGORY_ORDER},
         "min_route_percent": int(round(_minimum_ratio() * 100)),
         "band_enabled": band_enabled(),
         "scanned_days": len(log_paths()),
         "events": len(events),
         "summary": summary,
+        "sections": category_sections(rows),
         "materials": rows,
         "totals": totals,
     }
@@ -451,36 +588,38 @@ def human_hours(hours):
 
 
 def describe(result):
-    """一行话描述某种材料的冷却状态。"""
+    """一行话描述某种材料/魔物的冷却状态。"""
     material = result.get("material") or "?"
+    category = CATEGORY_LABELS.get(result.get("category"), "")
+    tag = f"（{category}）" if category else ""
     if not result.get("known"):
-        return f"✅ {material}：没有采集记录（按已刷新处理，可以采）"
+        return f"✅ {material}{tag}：没有记录（按已刷新处理，可以去）"
     last = result.get("last_at")
     when = last.strftime("%m-%d %H:%M") if isinstance(last, datetime.datetime) else "（时间未知）"
     total = result.get("total_routes") or 0
     ran = result.get("ran_routes") or 0
     if result.get("partial"):
-        # 只跑了一部分：多半是防闪退隔离带顺带开的那一条，或中途停了 —— 不能算采完
+        # 只跑了一部分：多半是防闪退隔离带顺带开的那一条，或中途停了 —— 不能算跑完
         detail = f"{ran}/{total} 条路线" if total else f"{ran} 条路线"
         return (
-            f"✅ {material}：{when} 只采了 {detail}（其余还没采过），**不算采完**，现在可以继续采"
+            f"✅ {material}{tag}：{when} 只跑了 {detail}（其余还没跑过），**不算跑完**，现在可以继续"
         )
     if result["cooling"]:
         return (
-            f"⏳ {material}：{when} 采过（{human_hours(result['hours_ago'])}前），"
+            f"⏳ {material}{tag}：{when} 采过（{human_hours(result['hours_ago'])}前），"
             f"还没刷新，还要等约 {human_hours(result['hours_left'])}"
         )
     return (
-        f"✅ {material}：{when} 采过（{human_hours(result['hours_ago'])}前），"
-        f"已刷新（{cooldown_hours()} 小时冷却已过），可以采"
+        f"✅ {material}{tag}：{when} 采过（{human_hours(result['hours_ago'])}前），"
+        f"已刷新（{result.get('hours', cooldown_hours())} 小时冷却已过），可以去"
     )
 
 
 def cooling_materials(materials=None):
-    """给定材料里还在冷却的（不给就统计"最近采过且仍冷却"的采集类材料）。
+    """给定材料里还在冷却的（不给就统计"最近跑过且仍冷却"的全部四类资源）。
 
-    ⚠️ 不带参数时**只统计路线清单里的材料**（地图素材/矿物/食材与炼金）：
-    否则敌人与魔物那些魔物名（巡陆艇、蕈兽…）也会混进来 —— 它们不是 48 小时刷新的特产。
+    ⚠️ 不带参数时**只统计路线清单里的材料**（四类脚本组里的）：日志里还可能出现过
+    已经不存在的路线，那些材料账对不上就别列。
     """
     if materials is None:
         vocabulary = route_material_vocabulary()
@@ -574,54 +713,101 @@ def material_from_project(project):
     )
 
 
-# 路线文件名 → 材料名（由"采集类目"的脚本组现算，按组文件 mtime 缓存）
+# 路线文件名 → 材料名，以及 材料名 → 类别（由各脚本组现算，按组文件 mtime 缓存）
 _ROUTE_INDEX = {}
+_ROUTE_CATEGORIES = {}
 _ROUTE_INDEX_KEY = {"key": None}
 
 
 def _collect_group_paths():
-    return (
-        getattr(config, "BGI_MAP_CONFIG", ""),
-        getattr(config, "BGI_MINE_CONFIG", ""),
-        getattr(config, "BGI_COOK_CONFIG", ""),
+    """四类资源各自的脚本组路径（顺序与 CATEGORY_ORDER 对应）。"""
+    return tuple(
+        (category, getattr(config, key, ""))
+        for category, key in (
+            (CATEGORY_SPECIALTY, CATEGORY_CONFIG_KEYS[CATEGORY_SPECIALTY]),
+            (CATEGORY_MINE, CATEGORY_CONFIG_KEYS[CATEGORY_MINE]),
+            (CATEGORY_COOK, CATEGORY_CONFIG_KEYS[CATEGORY_COOK]),
+            (CATEGORY_HUNT, CATEGORY_CONFIG_KEYS[CATEGORY_HUNT]),
+        )
     )
 
 
-def route_material_index():
-    """{路线文件名: 材料名}（地图素材 / 矿物 / 食材与炼金三个组）。
-
-    为什么需要它：日志里只有一条路线的**文件名**，而有些路线的文件名不带材料
-    （`1灵濛山.json`、`3药蝶谷.json`）或前缀不是纯数字（`09A-清心-…`）——
-    这时就得回查脚本组，看这个文件挂在哪个材料目录下。
-    """
+def _refresh_route_index():
     candidates = _collect_group_paths()
     key = tuple(
-        (path, (os.path.getmtime(path) if os.path.isfile(path) else None))
-        for path in candidates
+        (category, path, (os.path.getmtime(path) if os.path.isfile(path) else None))
+        for category, path in candidates
     )
     if _ROUTE_INDEX_KEY.get("key") == key:
-        return _ROUTE_INDEX
+        return
 
     try:
         from skills import route_group
     except Exception:        # noqa: BLE001
-        return _ROUTE_INDEX
+        return
 
-    index = {}
-    for path in candidates:
+    index, categories = {}, {}
+    for category, path in candidates:
         if not path or not os.path.isfile(path):
             continue
         group = route_group.load_group(path) or {}
         for project in group.get("projects") or []:
             name = os.path.basename(str(project.get("name") or ""))
             material = material_from_project(project)
-            if name and material:
+            if not material:
+                continue
+            if name:
                 index.setdefault(name, material)
+            # 一个材料可能同时出现在多个组里（比如石珀既在矿物组又在特产组）——
+            # 按 CATEGORY_ORDER 的顺序扫，setdefault 保留**先命中的**那个类别（特产优先）。
+            # 时长另有单品覆盖表 MATERIAL_HOURS，所以类别取哪个都不影响矿物按矿种算。
+            categories.setdefault(material, category)
 
     _ROUTE_INDEX.clear()
     _ROUTE_INDEX.update(index)
+    _ROUTE_CATEGORIES.clear()
+    _ROUTE_CATEGORIES.update(categories)
     _ROUTE_INDEX_KEY["key"] = key
+
+
+def route_material_index():
+    """{路线文件名: 材料名}（四类资源的脚本组都算）。
+
+    为什么需要它：日志里只有一条路线的**文件名**，而有些路线的文件名不带材料
+    （`1灵濛山.json`、`3药蝶谷.json`）或前缀不是纯数字（`09A-清心-…`）——
+    这时就得回查脚本组，看这个文件挂在哪个材料目录下。
+    """
+    _refresh_route_index()
     return _ROUTE_INDEX
+
+
+def material_category_index():
+    """{材料名: 类别}（由它出现在哪个脚本组决定）。"""
+    _refresh_route_index()
+    return _ROUTE_CATEGORIES
+
+
+def category_of(material):
+    """这种材料属于哪一类（特产 / 矿物 / 食材与炼金 / 敌人与魔物）。
+
+    类别**只看它挂在哪个脚本组**：那是玩家自己分的类，比任何字典都准
+    （实测百科字典里连霜仙花、久雨莲这些新地区的特产都没有）。
+    查不到的（例如手动登记的材料）按"地区特产"处理。
+    """
+    material = str(material or "").strip()
+    if not material:
+        return CATEGORY_SPECIALTY
+    return material_category_index().get(material, CATEGORY_SPECIALTY)
+
+
+def hours_for(material, category=None):
+    """这种材料的冷却时长（小时）：先看按材料覆盖的表，再按类别。"""
+    category = category or category_of(material)
+    override = MATERIAL_HOURS.get(str(material or "").strip())
+    if override and category in (CATEGORY_MINE, CATEGORY_SPECIALTY):
+        # 矿物按材料分档（铁/星银/水晶…）；石珀、夜泊石这类"既算特产又是矿点"的也照此
+        return int(override)
+    return category_hours(category)
 
 
 def material_for_route(route_name):
@@ -633,13 +819,17 @@ def material_for_route(route_name):
     return route_material_index().get(name, "")
 
 
-def route_material_vocabulary():
-    """脚本组路线里出现过的材料名（= BGI 真能去采的东西）。
+def route_material_vocabulary(categories=None):
+    """脚本组路线里出现过的材料名（= BGI 真能去刷的东西）。
 
-    只统计"采集类目"的三个组（地图素材 / 矿物 / 食材与炼金）：敌人与魔物那些组的
-    `folderName` 末尾是魔物名（巡陆艇、蕈兽…），它们不是 48 小时刷新的特产。
+    默认返回**四类全部**（特产 / 矿物 / 食材与炼金 / 敌人与魔物里的魔物名）；
+    传 `categories=("specialty",)` 就只要地区特产。
     """
-    return set(route_material_index().values())
+    mapping = material_category_index()
+    if categories is None:
+        return set(mapping)
+    wanted = {str(item) for item in categories}
+    return {material for material, category in mapping.items() if category in wanted}
 
 
 def _specialty_index():
@@ -697,31 +887,61 @@ def specialty_of(character):
     return "", ""
 
 
-def resolve_material(target):
-    """把玩家/模型给的目标解析成采集物材料名。返回 (材料名, 说明)；认不出来给 ("", 原因)。"""
+# 各类别里"被查的东西"该叫什么（写提示语用）
+CATEGORY_KINDS = {
+    CATEGORY_SPECIALTY: "采集物",
+    CATEGORY_MINE: "矿物",
+    CATEGORY_COOK: "食材",
+    CATEGORY_HUNT: "魔物",
+}
+# 各类别查不到时给的例子（照着说就能对上）
+CATEGORY_EXAMPLES = {
+    CATEGORY_SPECIALTY: "霜仙花",
+    CATEGORY_MINE: "水晶块",
+    CATEGORY_COOK: "久雨莲",
+    CATEGORY_HUNT: "蕈兽",
+}
+
+
+def resolve_material(target, category=None):
+    """把玩家/模型给的目标解析成材料名（或魔物名）。返回 (名字, 说明)；认不出来给 ("", 原因)。
+
+    `category` 给定时**只在这个类别里找**（「刷点蕈兽」不该被当成特产去查），
+    并且不会去做"角色名 → 特产"的翻译（那只对特产有意义）。
+    """
     text = str(target or "").strip()
     if not text:
         return "", "目标为空"
     text = _TARGET_TAIL_RE.sub("", text).strip()          # 「蓝砚的突破材料」→「蓝砚」
-    text = re.sub(r"^(去|帮我|采集|采|摘|捡)+", "", text).strip()
+    text = re.sub(r"^(去|帮我|采集|采|摘|捡|刷|打|挖|跑)+", "", text).strip()
 
-    vocabulary = route_material_vocabulary()
+    category = str(category or "").strip() or None
+    vocabulary = route_material_vocabulary((category,) if category else None)
     if text in vocabulary:
-        return text, "材料名"
+        return text, ("魔物名" if category == CATEGORY_HUNT else "材料名")
 
-    material, source = specialty_of(text)
-    if material:
-        return material, f"角色解析（{source}）"
+    # 「角色名 → TA 的特产」只对地区特产有意义
+    if category in (None, CATEGORY_SPECIALTY):
+        material, source = specialty_of(text)
+        if material:
+            return material, f"角色解析（{source}）"
 
-    # 目标里嵌着材料名（「采集霜仙花」残渣 / 「霜仙花的路线」）
+    # 目标里嵌着地名（「采集霜仙花」残渣 / 「霜仙花的路线」）
     for material in sorted(vocabulary, key=len, reverse=True):
         if material and material in text:
-            return material, "材料名（模糊匹配）"
+            return material, ("魔物名（模糊匹配）" if category == CATEGORY_HUNT else "材料名（模糊匹配）")
 
-    return "", (
-        f"认不出「{text}」是哪种采集物：本地字典里没有这个角色，"
-        "也不是地图素材组里的材料名 —— 请直接说材料名（例如「霜仙花」）"
-    )
+    kind = CATEGORY_KINDS.get(category or CATEGORY_SPECIALTY, "采集物")
+    example = CATEGORY_EXAMPLES.get(category or CATEGORY_SPECIALTY, "霜仙花")
+    where = CATEGORY_LABELS.get(category, "地图素材组") if category else "地图素材组"
+    if category == CATEGORY_HUNT:
+        hint = f"本地字典里没有这个角色，也不是{where}里的魔物名 —— 请直接说魔物名（例如「{example}」）"
+    else:
+        hint = (
+            f"本地字典里没有这个角色，也不是{where}里的材料名 —— "
+            f"请直接说材料名（例如「{example}」）"
+        )
+    return "", f"认不出「{text}」是哪种{kind}：{hint}"
 
 
 def is_forced(text):
@@ -735,20 +955,22 @@ def is_forced(text):
 # ==========================================
 
 
-def notice_lines(targets):
-    """给审批屏的计划行：每个采集目标一行状态。
+def notice_lines(targets, category=None):
+    """给审批屏的计划行：每个目标一行状态。
 
-    返回 (lines, blocked_materials)；blocked = 还在冷却、本次不该采的。
+    返回 (lines, blocked_materials)；blocked = 还在冷却、本次不该跑的。
+    `category` 会给目标解析限定类别（刷怪时只按魔物名解析，别把「蕈兽」当特产查）。
     """
     lines = []
     blocked = []
+    kind = CATEGORY_KINDS.get(category or CATEGORY_SPECIALTY, "采集")
     for target in targets or ():
-        material, note = resolve_material(target)
+        material, note = resolve_material(target, category=category)
         if not material:
-            lines.append(f"⚠️ 采集目标「{target}」：{note}")
+            lines.append(f"⚠️ {kind}目标「{target}」：{note}")
             continue
         result = status(material)
-        tag = f"（来自{note}）" if note != "材料名" else ""
+        tag = "" if note.startswith(("材料名", "魔物名")) else f"（来自{note}）"
         if result["cooling"]:
             blocked.append(material)
             lines.append("⏳ " + describe(result).replace("⏳ ", "") + tag)
@@ -757,25 +979,28 @@ def notice_lines(targets):
     return lines, blocked
 
 
-def cooldown_block(now=None, hours=48):
-    """给大模型的"采集物冷却"上下文（只列还在冷却里的，避免刷屏）。
+def cooldown_block(now=None):
+    """给大模型的"世界资源冷却"上下文（只列还在冷却里的，避免刷屏）。
 
-    玩家/模型据此可以：① 认出"霜仙花还没刷新"；② 挑一个已经刷新的材料；
-    ③ 在拿不准角色对应哪种采集物时，直接问玩家。
+    四类资源都算（特产 / 矿物 / 食材 / 魔物），每行都带类别与时长，模型据此可以：
+    ① 认出"霜仙花还没刷新"；② 挑一个已经刷新的替代；③ 拿不准角色对应哪种采集物时问玩家。
     """
     rows = cooling_materials()
     if not rows:
         return ""
+    hours = " / ".join(
+        f"{CATEGORY_LABELS[item]} {category_hours(item)}h" for item in CATEGORY_ORDER
+    )
     lines = [
-        f"\n\n⏳ 【采集物冷却】（地区特产 48 小时刷新，下面是**当前还没刷新**的）"
+        f"\n\n⏳ 【资源冷却】（{hours}；下面是**当前还没刷新**的）"
     ]
     for result in rows[:12]:
         lines.append("   · " + describe(result))
     if len(rows) > 12:
-        lines.append(f"   · …还有 {len(rows) - 12} 种")
+        lines.append(f"   · …还有 {len(rows) - 12} 项")
     lines.append(
-        "   ↳ 玩家点名的采集物如果在这张表里：**不要**安排采集，直接告诉他还要等多久"
-        "（可以顺便建议一个已刷新的）；玩家明确说「强制采集」时才照做。\n"
+        "   ↳ 玩家点名的目标如果在这张表里：**不要**安排，直接告诉他还要等多久"
+        "（可以顺便建议一个已刷新的）；玩家明确说「强制采集 / 强制跑」时才照做。\n"
         "   ↳ 玩家说的是角色名而不是材料名时，按展柜/展柜外角色数据里该角色的「特产」来对应；"
         "拿不准就问玩家材料名，别猜。"
     )
@@ -793,25 +1018,37 @@ def _main(argv=None):
     """
     import argparse
 
-    parser = argparse.ArgumentParser(description="地区特产 48 小时冷却检测")
-    parser.add_argument("--check", metavar="材料/角色", help="查一种材料（或角色）的冷却状态")
+    parser = argparse.ArgumentParser(description="世界资源（特产/矿物/食材/魔物）冷却检测")
+    parser.add_argument("--check", metavar="材料/角色/魔物", help="查一个目标的冷却状态")
     parser.add_argument("--manual", metavar="材料", help="手动记为刚采过")
     parser.add_argument("--clear", metavar="材料", nargs="?", const="", help="清掉手动记录（不给名字=全清）")
-    parser.add_argument("--materials", action="store_true", help="列出地图素材组里的材料名")
+    parser.add_argument("--materials", action="store_true", help="按类别列出脚本组里能刷的东西")
+    parser.add_argument("--category", metavar="类别",
+                        help="配合 --check / --materials：specialty / mine / cook / hunt")
     args = parser.parse_args(argv)
 
-    print(f"冷却时长：{cooldown_hours()} 小时；扫描日志 {len(log_paths())} 天")
+    category = str(args.category or "").strip() or None
+    hours = " / ".join(f"{CATEGORY_LABELS[item]} {category_hours(item)}h" for item in CATEGORY_ORDER)
+    print(f"冷却时长：{hours}；往前扫 {scan_days()} 天日志（本次找到 {len(log_paths())} 个文件）")
 
     if args.materials:
-        names = sorted(route_material_vocabulary())
-        print(f"共 {len(names)} 种：{'、'.join(names)}")
+        vocabulary = route_material_vocabulary((category,) if category else None)
+        mapping = material_category_index()
+        groups = {}
+        for name in sorted(vocabulary):
+            groups.setdefault(mapping.get(name, category or CATEGORY_SPECIALTY), []).append(name)
+        print(f"共 {len(vocabulary)} 项：")
+        for item in CATEGORY_ORDER:
+            names = groups.get(item)
+            if names:
+                print(f"  【{CATEGORY_LABELS[item]}】{len(names)} 项：{'、'.join(names)}")
         return 0
 
     if args.manual:
-        material, note = resolve_material(args.manual)
+        material, note = resolve_material(args.manual, category=category)
         material = material or args.manual
         mark_manual(material)
-        print(f"✅ 已把「{material}」记为刚采过" + (f"（{note}）" if note != "材料名" else ""))
+        print(f"✅ 已把「{material}」记为刚采过" + (f"（{note}）" if "材料名" not in note else ""))
         print("   " + describe(status(material)))
         return 0
 
@@ -821,20 +1058,25 @@ def _main(argv=None):
         return 0
 
     if args.check:
-        material, note = resolve_material(args.check)
+        material, note = resolve_material(args.check, category=category)
         if not material:
             print("❌ " + note)
             return 1
-        print(("🔎 解析：" + note + " → 「" + material + "」") if note != "材料名" else "")
+        print(("🔎 解析：" + note + " → 「" + material + "」") if "材料名" not in note else "")
         print(describe(status(material)))
         return 0
 
-    rows = cooling_materials()
-    if not rows:
-        print("✅ 当前没有还在冷却的采集物（最近都没采过，或都已过 48 小时）")
-    else:
-        print(f"⏳ 还在冷却的有 {len(rows)} 种：")
-        for result in sorted(rows, key=lambda item: item["hours_left"]):
+    data = overview()
+    if not data["summary"]["cooling"]:
+        print("✅ 当前没有还在冷却的目标（最近都没跑过，或都已过刷新时间）")
+        return 0
+    print(f"⏳ 还在冷却的有 {data['summary']['cooling']} 项：")
+    for section in data["sections"]:
+        items = [row for row in section["materials"] if row["cooling"]]
+        if not items:
+            continue
+        print(f"  【{section['label']}】刷新 {section['hours']} 小时")
+        for result in items:
             print("   " + describe(result))
     return 0
 

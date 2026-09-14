@@ -104,7 +104,7 @@ class PartialCollectionTests(unittest.TestCase):
 
         self.assertTrue(result["partial"])
         self.assertFalse(result["cooling"])
-        self.assertIn("不算采完", gather_cooldown.describe(result))
+        self.assertIn("不算跑完", gather_cooldown.describe(result))
         self.assertIn("1/16", gather_cooldown.describe(result))
 
     def test_full_collection_still_cools_down(self):
@@ -438,7 +438,7 @@ class RouteMaterialIndexTests(unittest.TestCase):
 
 
 class FilterTests(unittest.TestCase):
-    """执行前的拦截：`bgi_controller._filter_gather_cooldown`。"""
+    """执行前的拦截：`bgi_controller._filter_cooldown`（四类资源都会过一遍）。"""
 
     def setUp(self):
         patcher = patch.object(gather_cooldown, "status")
@@ -460,7 +460,7 @@ class FilterTests(unittest.TestCase):
     def test_cooling_material_is_dropped_with_an_explanation(self):
         self.status.side_effect = lambda material: self._cooling(material)
 
-        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"])
+        kept, lines = bgi_controller._filter_cooldown(["霜仙花"])
 
         self.assertEqual(kept, [])
         self.assertTrue(any("霜仙花" in line for line in lines))
@@ -468,7 +468,7 @@ class FilterTests(unittest.TestCase):
     def test_refreshed_material_is_kept(self):
         self.status.side_effect = lambda material: self._ready(material)
 
-        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"])
+        kept, lines = bgi_controller._filter_cooldown(["霜仙花"])
 
         self.assertEqual(kept, ["霜仙花"])
         self.assertEqual(lines, [])
@@ -476,18 +476,46 @@ class FilterTests(unittest.TestCase):
     def test_force_keeps_it_and_says_so(self):
         self.status.side_effect = lambda material: self._cooling(material)
 
-        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"], force=True)
+        kept, lines = bgi_controller._filter_cooldown(["霜仙花"], force=True)
 
         self.assertEqual(kept, ["霜仙花"])
-        self.assertTrue(any("强制采集" in line for line in lines))
+        self.assertTrue(any("强制" in line for line in lines))
 
     def test_unresolvable_target_is_kept_but_flagged(self):
         """认不出的目标不能静默丢掉（下游会按老逻辑提示玩家找不到路线）。"""
-        with patch.object(gather_cooldown, "resolve_material", return_value=("", "认不出来")):
-            kept, lines = bgi_controller._filter_gather_cooldown(["奥黛塔"])
+        with patch.object(
+            gather_cooldown, "resolve_material",
+            side_effect=lambda target, category=None: ("", "认不出来"),
+        ):
+            kept, lines = bgi_controller._filter_cooldown(["奥黛塔"])
 
         self.assertEqual(kept, ["奥黛塔"])
         self.assertTrue(any("认不出来" in line for line in lines))
+
+    def test_category_is_passed_through(self):
+        """刷怪时只按魔物名解析（别把「蕈兽」当特产去查）。"""
+        seen = {}
+
+        def fake_status(material):
+            seen["material"] = material
+            return self._ready(material)
+
+        self.status.side_effect = fake_status
+        with patch.object(
+            gather_cooldown, "resolve_material",
+            side_effect=lambda target, category=None: (seen.setdefault("category", category), "魔物名"),
+        ):
+            bgi_controller._filter_cooldown(["蕈兽"], category="hunt")
+
+        self.assertEqual(seen.get("category"), "hunt")
+
+    def test_old_alias_still_works(self):
+        """老名字 `_filter_gather_cooldown` 还留着（老脚本/老文档里在用）。"""
+        self.status.side_effect = lambda material: self._ready(material)
+
+        kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"])
+
+        self.assertEqual(kept, ["霜仙花"])
 
 
 class PromptBlockTests(unittest.TestCase):
@@ -498,10 +526,12 @@ class PromptBlockTests(unittest.TestCase):
         }]):
             block = gather_cooldown.cooldown_block()
 
-        self.assertIn("采集物冷却", block)
+        self.assertIn("资源冷却", block)
         self.assertIn("霜仙花", block)
-        self.assertIn("48 小时", block)
-        self.assertIn("强制采集", block)
+        self.assertIn("48h", block)
+        self.assertIn("72h", block)
+        self.assertIn("12h", block)
+        self.assertIn("强制", block)
         self.assertIn("别猜", block)
 
     def test_no_block_when_nothing_is_cooling(self):

@@ -638,7 +638,7 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(categories["hoe"]["count"], 1)
         self.assertEqual(categories["hoe"]["label"], "锄大地")
 
-    # ---------- 采集冷却页（Studio「采集冷却」） ----------
+    # ---------- 资源冷却页（Studio「资源冷却」） ----------
 
     def _write_map_group(self, projects):
         group_dir = self.root / "ScriptGroup"
@@ -651,7 +651,7 @@ class ApiTests(unittest.TestCase):
         return group_dir, path
 
     def _cooldown_env(self):
-        """把采集冷却相关的路径都指到临时目录（别读开发机真实的日志/组）。"""
+        """把资源冷却相关的路径都指到临时目录（别读开发机真实的日志/组）。"""
         manual = self.root / "gather_cooldown_manual.json"
         log_dir = self.root / "bgi-log"
         log_dir.mkdir(exist_ok=True)
@@ -728,7 +728,7 @@ class ApiTests(unittest.TestCase):
             response = self.client.get("/api/cooldown")
 
         self.assertEqual(response.status_code, 500)
-        self.assertIn("读取采集冷却失败", response.get_json()["error"])
+        self.assertIn("读取冷却失败", response.get_json()["error"])
 
 
 if __name__ == "__main__":

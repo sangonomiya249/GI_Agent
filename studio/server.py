@@ -544,22 +544,25 @@ def create_app(runner=None, env_path=None, channels=None):
 
     @app.get("/api/cooldown")
     def api_cooldown():
-        """地区特产 48 小时冷却一览（Studio 的「采集冷却」页）。
+        """四类世界资源的冷却一览（Studio 的「资源冷却」页）。
 
         数据来自 `skills.gather_cooldown.overview()`：一次算完全部材料（内部只解析一遍日志）。
+        类别：地区特产 48 / 矿物 72（按材料还分档）/ 食材与炼金 24 / 敌人与魔物 12 小时。
         """
         from skills import gather_cooldown
 
         try:
             data = gather_cooldown.overview()
         except Exception as exc:            # noqa: BLE001 —— 页面不该因为日志读不到就 500
-            return _json_error(f"读取采集冷却失败：{type(exc).__name__} {exc}", 500)
+            return _json_error(f"读取冷却失败：{type(exc).__name__} {exc}", 500)
 
-        rows = []
-        for result in data["materials"]:
+        def serialize(result):
             last = result.get("last_at")
-            rows.append({
+            return {
                 "material": result["material"],
+                "category": result.get("category", ""),
+                "category_label": result.get("category_label", ""),
+                "hours": result.get("hours", data["hours"]),
                 "cooling": bool(result["cooling"]),
                 "known": bool(result["known"]),
                 "partial": bool(result["partial"]),
@@ -574,18 +577,32 @@ def create_app(runner=None, env_path=None, channels=None):
                 "total_routes": result["total_routes"],
                 "ran_routes": result["ran_routes"],
                 "describe": gather_cooldown.describe(result),
-            })
+            }
+
+        sections = [
+            {
+                "key": section["key"],
+                "label": section["label"],
+                "hours": section["hours"],
+                "note": section["note"],
+                "summary": section["summary"],
+                "materials": [serialize(row) for row in section["materials"]],
+            }
+            for section in data["sections"]
+        ]
 
         return jsonify({
             "ok": True,
             "hours": data["hours"],
+            "category_hours": data["category_hours"],
             "min_route_percent": data["min_route_percent"],
             "band_enabled": data["band_enabled"],
             "scanned_days": data["scanned_days"],
             "events": data["events"],
             "generated_at": data["now"].strftime("%H:%M:%S"),
             "summary": data["summary"],
-            "materials": rows,
+            "sections": sections,
+            "materials": [serialize(row) for row in data["materials"]],
         })
 
     @app.post("/api/cooldown/manual")

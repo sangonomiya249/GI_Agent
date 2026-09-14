@@ -246,18 +246,29 @@ BGI_FOCUS_GUARD_STRIKES = get_int_env("BGI_FOCUS_GUARD_STRIKES", 2)
 GAME_CLOSE_GRACE_SECONDS = get_int_env("GAME_CLOSE_GRACE_SECONDS", 10)
 
 # ==========================================
-# 🌟 采集物冷却（地区特产 48 小时刷新）
+# 🌟 世界资源冷却（四类资源、四套刷新规则）
 # ==========================================
-# 采集类任务在**排期前**会先查"这个材料刷了没"：数据来自 BetterGI 自己的日志
+# 排期前会先查"这个东西刷了没"：数据来自 BetterGI 自己的日志
 # （每条路线跑完都会打「脚本执行结束: "01-霜仙花-彩冰镇左上-3个.json"」），
-# 所以玩家自己在 BGI 里手动跑过的也算 —— 48 小时内采过的不重复采，只提示还要等多久。
-GATHER_COOLDOWN_HOURS = get_int_env("GATHER_COOLDOWN_HOURS", 48)
-# 采完还想马上再采时，允许玩家用「强制采集」这类说法跳过冷却拦截
+# 所以玩家自己在 BGI 里手动跑过的也算 —— 冷却内跑过的不重复跑，只提示还要等多久。
+#
+# 时长出处（bilibili wiki「新手教程 · 采集物刷新时间」，社区 wiki、非官方数值）：
+#   · 地区特产「采集后经过 48 小时刷新」
+#   · 矿物按档：铁块/白铁块「上次刷新后的次日」、星银矿石「第二日」、水晶块/紫晶块「第三日」
+#     （服务器 0 点），魔晶块「每天 6 点」—— 这里按小时近似，并可逐材料覆盖
+#     （见 skills/gather_cooldown.MATERIAL_HOURS）
+#   · 大部分食材「每日凌晨 0 点刷新」→ 按 24 小时近似
+#   · 动物/晶蝶类「采集后 12 小时刷新以及凌晨四点刷新」；普通魔物社区通行说法同为 12 小时
+GATHER_COOLDOWN_HOURS = get_int_env("GATHER_COOLDOWN_HOURS", 48)       # 地区特产
+MINE_COOLDOWN_HOURS = get_int_env("MINE_COOLDOWN_HOURS", 72)           # 矿物（水晶块/紫晶块那一档）
+COOK_COOLDOWN_HOURS = get_int_env("COOK_COOLDOWN_HOURS", 24)           # 食材与炼金
+HUNT_COOLDOWN_HOURS = get_int_env("HUNT_COOLDOWN_HOURS", 12)           # 敌人与魔物
+# 冷却没到还想硬跑时，允许玩家用「强制采集 / 强制跑」这类说法跳过拦截（对所有类别都生效）
 GATHER_COOLDOWN_ALLOW_FORCE = get_env("GATHER_COOLDOWN_ALLOW_FORCE", "1") == "1"
-# "采过了"的判定门槛：这种材料的路线至少要跑掉这个百分比才算采完（默认 80%）。
+# "跑完了"的判定门槛：这种材料的路线至少要跑掉这个百分比才算跑完（默认 80%）。
 # 为什么要它：**防闪退隔离带**会给没被点名的材料也打开一条路线（每连续 150 条 Disabled 开一条），
-# 玩家实测只跑了 1 条隔离带路线就被记成"采过"、白等 48 小时（万相石 1/16、晶化骨髓 1/6…）。
-# 门槛取 80% 而不是 100%：留一条路线失败（坏路线）的余地，但"只采了一半"仍算没采完、可以继续采。
+# 玩家实测只跑了 1 条隔离带路线就被记成"跑过"、白等一个刷新周期（万相石 1/16、晶化骨髓 1/6…）。
+# 门槛取 80% 而不是 100%：留一条路线失败（坏路线）的余地，但"只跑了一半"仍算没跑完、可以继续。
 GATHER_COOLDOWN_MIN_ROUTE_PERCENT = get_int_env("GATHER_COOLDOWN_MIN_ROUTE_PERCENT", 80)
 
 # ==========================================

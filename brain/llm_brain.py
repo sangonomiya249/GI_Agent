@@ -254,7 +254,7 @@ def ask_agent(messages, store, uid, open_id):
 
         wallet_notice = f"\n\n💰 【Agent 虚拟账本】当前已攒下：摩拉 {wallet['mora']}，经验书 {wallet['exp_books']} 本。\n📦 【已刷取Boss材料】：{boss_mats_str}\n（注：这仅代表系统近期的打工收益。规划前请严格对比材料缺口与已刷取数量，若已刷取数量 >= 缺口，必须停止安排该任务！）"
 
-        # 🌟 采集物冷却（地区特产 48 小时刷新）：直接读 BetterGI 日志算出来的，只列"还没刷新"的。
+        # 🌟 资源冷却（特产 48h / 矿物 72h / 食材 24h / 魔物 12h）：直接读 BetterGI 日志算出来的，只列"还没刷新"的。
         #    模型据此能认出"霜仙花还没刷新"，或者改推一个已经刷新的材料；角色名→采集物的对应
         #    由代码确定性解析（见 skills/gather_cooldown.resolve_material）。
         try:
@@ -266,7 +266,7 @@ def ask_agent(messages, store, uid, open_id):
                 and gather_cooldown.is_forced(latest_user_text)
             )
         except Exception as exc:        # noqa: BLE001 —— 检查失败不该影响规划
-            print(f"⚠️ 采集物冷却检查不可用（不影响本轮）：{type(exc).__name__} {exc}")
+            print(f"⚠️ 资源冷却检查不可用（不影响本轮）：{type(exc).__name__} {exc}")
             cooldown_notice = ""
             forced_gather = False
 
@@ -365,25 +365,32 @@ def ask_agent(messages, store, uid, open_id):
                 for reclassify_notice in reclassify_free_tasks(free_tasks):
                     guard_notices.append(reclassify_notice)
 
-                # 🌟 采集物冷却（地区特产 48 小时刷新）：把状态摆到审批屏上，
-                #    让玩家在点 y 之前就知道"这个材料其实还没刷新"。
-                #    执行时还会再拦一道（skills/bgi_controller._filter_gather_cooldown）。
-                gather_targets = [
-                    str(item.get("target") or "")
+                # 🌟 冷却检查（四类资源各有各的刷新时长：特产 48 / 矿物 72 / 食材 24 / 魔物 12）：
+                #    把状态摆到审批屏上，让玩家在点 y 之前就知道"这个东西其实还没刷新"。
+                #    执行时还会再拦一道（skills/bgi_controller._filter_cooldown）。
+                #    ⚠️ 一开始只查 gather（特产），结果"刷怪 / 挖矿 / 采食材"永远不查冷却、白跑一趟。
+                cooldown_targets = [
+                    (str(item.get("target") or ""), str(item.get("action") or ""))
                     for item in (free_tasks or [])
-                    if isinstance(item, dict) and item.get("action") == "gather"
+                    if isinstance(item, dict) and item.get("target")
                 ]
-                if gather_targets:
+                if cooldown_targets:
                     if forced_gather:
-                        # 玩家说了「强制采集」：明确告诉执行层别拦
+                        # 玩家说了「强制采集 / 强制跑」：明确告诉执行层别拦
                         bgi_cmd["force_gather"] = True
                     try:
                         from skills import gather_cooldown
 
-                        cooldown_lines, _blocked = gather_cooldown.notice_lines(gather_targets)
-                        guard_notices.extend(cooldown_lines)
+                        for target, action in cooldown_targets:
+                            category = action if action in gather_cooldown.CATEGORY_ORDER else None
+                            if action == "gather":
+                                category = gather_cooldown.CATEGORY_SPECIALTY
+                            cooldown_lines, _blocked = gather_cooldown.notice_lines(
+                                [target], category=category
+                            )
+                            guard_notices.extend(cooldown_lines)
                     except Exception as exc:        # noqa: BLE001 —— 检查失败不该挡住规划
-                        print(f"⚠️ 采集物冷却检查失败（不影响审批）：{type(exc).__name__} {exc}")
+                        print(f"⚠️ 冷却检查失败（不影响审批）：{type(exc).__name__} {exc}")
 
                 # 🌟 Boss 讨伐目标提前翻译 + 对齐：LLM 给角色名（「蓝砚」）就给官方 Boss 名，
                 # 给错名字就纠正，解析不出来（不支持的 Boss / 字典缺口）就把问题摆到审批文本里，
