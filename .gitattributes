@@ -1,0 +1,19 @@
+# 换行符策略（git 在 checkout / commit 时按下面规则转换）
+#
+# 为什么需要这个文件：这些文件的换行**必须**是对的那一种 ——
+#   * Windows 批处理（.bat / .cmd）要 CRLF：LF-only 的 bat 是经典坑
+#     （cmd.exe 解析标签/goto 与括号块时会出问题）；
+#   * shell 脚本要 LF：CRLF 会让 sh 把 \r 当成命令的一部分，报一堆莫名其妙的错；
+#   * PowerShell 要 CRLF，另外 Windows PowerShell 5.1 靠 UTF-8 BOM 判断编码
+#     （没有 BOM 时中文注释会乱码）—— BOM 属于文件内容，见 scripts/*.ps1。
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+*.sh  text eol=lf
+
+# 二进制文件：不要动
+*.exe binary
+*.ico binary
+*.png binary
+*.dll binary
