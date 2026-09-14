@@ -382,9 +382,16 @@ def ask_agent(messages, store, uid, open_id):
                         from skills import gather_cooldown
 
                         for target, action in cooldown_targets:
-                            category = action if action in gather_cooldown.CATEGORY_ORDER else None
-                            if action == "gather":
+                            # 只有"刷资源"的动作才查冷却：gather = 地区特产，
+                            # hunt / mine / cook = 各自类别（魔物 12h、矿物 72h、食材 24h）。
+                            # 锄大地 / 整脚本 / Boss 讨伐不是"资源刷新"，拿冷却去套它们
+                            # 只会报一堆莫名其妙的"认不出"（实测踩过）。
+                            if action in ("gather", gather_cooldown.CATEGORY_SPECIALTY):
                                 category = gather_cooldown.CATEGORY_SPECIALTY
+                            elif action in gather_cooldown.CATEGORY_ORDER:
+                                category = action
+                            else:
+                                continue
                             cooldown_lines, _blocked = gather_cooldown.notice_lines(
                                 [target], category=category
                             )

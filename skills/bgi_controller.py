@@ -419,9 +419,13 @@ def _filter_cooldown(items, force=False, category=None):
     · 目标是材料名 / 魔物名（「霜仙花」「蕈兽」）→ 直接查冷却；
     · 目标是角色名（「蓝砚」「奥黛塔的突破材料」）→ 先解析成 TA 的采集物再查；
     · 解析不出来的目标**保留**（交给下游按老逻辑处理：找不到路线会提示玩家），
-      但会在说明里写清楚"认不出"，免得静默消失；
+      但会在说明里写清楚"认不出"，免得静默消失 —— ⚠️ 只有**地区特产**这一类才提示：
+      特产词表是封闭集合（脚本组里的几十种草），认不出就是名字写错了；
+      魔物/矿物/食材的名字是开放的（玩家自建小组、掉落名、地名混着来），
+      报「认不出「蕈兽」是哪种魔物」只会让人以为指令错了（玩家实测报过），所以那边静默跳过。
     · `force=True`（玩家说了「强制采集 / 强制跑」）→ 全部保留，只把状态写进说明；
-    · `category`：只在这个类别里解析目标（例如刷怪时别把「蕈兽」当特产去查）。
+    · `category`：只在这个类别里解析目标（例如刷怪时别把「蕈兽」当特产去查），
+      并且按这个类别的时长算冷却。
     """
     try:
         from skills import gather_cooldown
@@ -437,9 +441,10 @@ def _filter_cooldown(items, force=False, category=None):
         material, note = gather_cooldown.resolve_material(target, category=category)
         if not material:
             kept.append(item)
-            notices.append(f"⚠️ 「{target}」：{note}")
+            if category in (None, gather_cooldown.CATEGORY_SPECIALTY):
+                notices.append(f"⚠️ 「{target}」：{note}")
             continue
-        result = gather_cooldown.status(material)
+        result = gather_cooldown.status(material, category=category)
         if result["cooling"]:
             if force:
                 kept.append(item)

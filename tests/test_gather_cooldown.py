@@ -17,6 +17,37 @@ from unittest.mock import patch
 import config
 from skills import bgi_controller, gather_cooldown
 
+_MODULE_TMP = None
+_MODULE_PATCHERS = []
+
+
+def setUpModule():
+    """把「脚本组目录 / 路线目录」指到空目录。
+
+    冷却词表现在还会扫**玩家自建的小组**（蕈兽.json / 虹滴晶.json / 骗骗花.json…），
+    不隔离的话用例会读到开发机真实的组：词表里平白多出魔物、断言随本机配置飘。
+    """
+    global _MODULE_TMP
+    _MODULE_TMP = tempfile.TemporaryDirectory()
+    for name, value in (
+        ("BGI_SCRIPT_GROUP_DIR", os.path.join(_MODULE_TMP.name, "ScriptGroup")),
+        ("BGI_AUTO_PATHING_DIR", os.path.join(_MODULE_TMP.name, "AutoPathing")),
+    ):
+        os.makedirs(value, exist_ok=True)
+        patcher = patch.object(config, name, value)
+        patcher.start()
+        _MODULE_PATCHERS.append(patcher)
+    gather_cooldown._ROUTE_INDEX_KEY["key"] = None
+    gather_cooldown._ROUTE_TOTALS_CACHE_KEY["key"] = None
+
+
+def tearDownModule():
+    for patcher in _MODULE_PATCHERS:
+        patcher.stop()
+    _MODULE_PATCHERS.clear()
+    if _MODULE_TMP is not None:
+        _MODULE_TMP.cleanup()
+
 
 def _write_log(path, entries):
     """按 BGI 的真实格式写一份日志：时间戳一行、正文一行。
@@ -458,7 +489,7 @@ class FilterTests(unittest.TestCase):
         }
 
     def test_cooling_material_is_dropped_with_an_explanation(self):
-        self.status.side_effect = lambda material: self._cooling(material)
+        self.status.side_effect = lambda material, **kwargs: self._cooling(material)
 
         kept, lines = bgi_controller._filter_cooldown(["霜仙花"])
 
@@ -466,7 +497,7 @@ class FilterTests(unittest.TestCase):
         self.assertTrue(any("霜仙花" in line for line in lines))
 
     def test_refreshed_material_is_kept(self):
-        self.status.side_effect = lambda material: self._ready(material)
+        self.status.side_effect = lambda material, **kwargs: self._ready(material)
 
         kept, lines = bgi_controller._filter_cooldown(["霜仙花"])
 
@@ -474,7 +505,7 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(lines, [])
 
     def test_force_keeps_it_and_says_so(self):
-        self.status.side_effect = lambda material: self._cooling(material)
+        self.status.side_effect = lambda material, **kwargs: self._cooling(material)
 
         kept, lines = bgi_controller._filter_cooldown(["霜仙花"], force=True)
 
@@ -482,7 +513,7 @@ class FilterTests(unittest.TestCase):
         self.assertTrue(any("强制" in line for line in lines))
 
     def test_unresolvable_target_is_kept_but_flagged(self):
-        """认不出的目标不能静默丢掉（下游会按老逻辑提示玩家找不到路线）。"""
+        """认不出的**特产**目标不能静默丢掉（下游会按老逻辑提示玩家找不到路线）。"""
         with patch.object(
             gather_cooldown, "resolve_material",
             side_effect=lambda target, category=None: ("", "认不出来"),
@@ -492,12 +523,28 @@ class FilterTests(unittest.TestCase):
         self.assertEqual(kept, ["奥黛塔"])
         self.assertTrue(any("认不出来" in line for line in lines))
 
+    def test_unresolvable_mob_is_kept_without_a_warning(self):
+        """魔物这边认不出就**别吭声**：玩家的组五花八门，我们的词表定不了它是不是无效目标。
+
+        实测（玩家 QQ 记录）：说「打蕈兽 / 打骗骗花 / 去采集虹滴晶」时每条都被回一句
+        「认不出「蕈兽」是哪种魔物（例如「蕈兽」）」—— 那些名字其实都能跑，纯属噪音。
+        """
+        with patch.object(
+            gather_cooldown, "resolve_material",
+            side_effect=lambda target, category=None: ("", "认不出来"),
+        ):
+            kept, lines = bgi_controller._filter_cooldown(["刀镡"], category="hunt")
+
+        self.assertEqual(kept, ["刀镡"])
+        self.assertEqual(lines, [])
+
     def test_category_is_passed_through(self):
-        """刷怪时只按魔物名解析（别把「蕈兽」当特产去查）。"""
+        """刷怪时只按魔物名解析（别把「蕈兽」当特产去查），并且按魔物的时长算冷却。"""
         seen = {}
 
-        def fake_status(material):
+        def fake_status(material, **kwargs):
             seen["material"] = material
+            seen["hours_category"] = kwargs.get("category")
             return self._ready(material)
 
         self.status.side_effect = fake_status
@@ -508,14 +555,119 @@ class FilterTests(unittest.TestCase):
             bgi_controller._filter_cooldown(["蕈兽"], category="hunt")
 
         self.assertEqual(seen.get("category"), "hunt")
+        self.assertEqual(seen.get("hours_category"), "hunt")
 
     def test_old_alias_still_works(self):
         """老名字 `_filter_gather_cooldown` 还留着（老脚本/老文档里在用）。"""
-        self.status.side_effect = lambda material: self._ready(material)
+        self.status.side_effect = lambda material, **kwargs: self._ready(material)
 
         kept, lines = bgi_controller._filter_gather_cooldown(["霜仙花"])
 
         self.assertEqual(kept, ["霜仙花"])
+
+
+class ExtraGroupTests(unittest.TestCase):
+    """玩家**自建**的小组（蕈兽.json / 骗骗花.json / 虹滴晶.json…）。
+
+    为什么单独立一组用例：玩家实测「去打蕈兽 / 只打骗骗花 / 去打飘浮灵 / 去采集虹滴晶」
+    四条指令全都回了「认不出…」—— 因为这些名字只在玩家自建的组里，
+    而冷却词表当时只读四个"总组"（总组里只有巡陆艇）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        self.group_dir = os.path.join(self.root, "ScriptGroup")
+        self.pathing_dir = os.path.join(self.root, "AutoPathing")
+        os.makedirs(self.group_dir)
+        # 真实情况：`AutoPathing/敌人与魔物/<魔物名>` 是魔物的权威名单
+        os.makedirs(os.path.join(self.pathing_dir, "敌人与魔物", "蕈兽"))
+
+        self._write_group("蕈兽.json", [
+            # 文件名不带材料名（作者随手写的），材料得从目录 `蕈兽\蕈兽@某人` 读
+            {"name": "须弥-二净甸天臂池西南-5个.json", "folderName": "蕈兽\\蕈兽@某人"},
+        ])
+        self._write_group("虹滴晶.json", [
+            # 文件名读出来的是地名「那夏镇下方」，必须让位给目录里的「虹滴晶」
+            {"name": "01-那夏镇下方-4个.json", "folderName": "矿物\\虹滴晶"},
+        ])
+        self._write_group("狗粮.json", [
+            {"name": "01-狗粮-某地-3个.json", "folderName": "狗粮\\狗粮@某人"},
+        ])
+
+        for name, value in (
+            ("BGI_SCRIPT_GROUP_DIR", self.group_dir),
+            ("BGI_AUTO_PATHING_DIR", self.pathing_dir),
+            ("BGI_MAP_CONFIG", ""),
+            ("BGI_MINE_CONFIG", ""),
+            ("BGI_COOK_CONFIG", ""),
+            ("BGI_ENEMY_CONFIG", ""),
+        ):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gather_cooldown._ROUTE_INDEX_KEY["key"] = None
+        gather_cooldown._ROUTE_TOTALS_CACHE_KEY["key"] = None
+
+    def _write_group(self, filename, projects):
+        with open(os.path.join(self.group_dir, filename), "w", encoding="utf-8") as handle:
+            json.dump({"name": filename[:-5], "projects": projects}, handle, ensure_ascii=False)
+
+    def test_mob_group_lands_in_the_hunt_category(self):
+        self.assertIn("蕈兽", gather_cooldown.route_material_vocabulary(("hunt",)))
+        self.assertEqual(gather_cooldown.category_of("蕈兽"), "hunt")
+        self.assertEqual(gather_cooldown.hours_for("蕈兽"), 12)
+
+    def test_mineral_group_lands_in_the_mine_category(self):
+        self.assertIn("虹滴晶", gather_cooldown.route_material_vocabulary(("mine",)))
+        self.assertEqual(gather_cooldown.category_of("虹滴晶"), "mine")
+        self.assertEqual(gather_cooldown.hours_for("虹滴晶"), 72)
+        self.assertEqual(gather_cooldown.route_totals().get("虹滴晶"), 1)
+
+    def test_unclassifiable_group_is_skipped(self):
+        """定不出类别的组（狗粮这种）**不进词表**：否则面板里会出现「狗粮」这种名字。"""
+        every = gather_cooldown.route_material_vocabulary()
+        self.assertNotIn("狗粮", every)
+        self.assertNotIn("狗粮", gather_cooldown.material_category_index())
+
+    def test_targets_resolve_through_their_own_groups(self):
+        for text, category, expected in (
+            ("去打蕈兽", "hunt", "蕈兽"),
+            ("去采集虹滴晶", "mine", "虹滴晶"),
+        ):
+            material, note = gather_cooldown.resolve_material(text, category=category)
+            self.assertEqual(material, expected, text)
+            self.assertTrue(note, text)
+
+    def test_route_name_follows_the_group_when_they_disagree(self):
+        """文件名读出的是地名 → 以脚本组为准（`01-那夏镇下方-4个.json` → 虹滴晶）。"""
+        self.assertEqual(gather_cooldown.material_for_route("01-那夏镇下方-4个.json"), "虹滴晶")
+
+    def test_mob_cooldown_is_visible_in_the_plan_lines(self):
+        events = [{
+            "material": "蕈兽", "route": "须弥-二净甸天臂池西南-5个.json",
+            "at": datetime.datetime.now() - datetime.timedelta(hours=2), "failed": False,
+        }]
+
+        with patch.object(gather_cooldown, "scan_events", return_value=events):
+            lines, blocked = gather_cooldown.notice_lines(["蕈兽"], category="hunt")
+
+        self.assertEqual(blocked, ["蕈兽"])
+        self.assertTrue(any("还没刷新" in line for line in lines), lines)
+
+    def test_unresolvable_mob_gets_no_plan_line(self):
+        lines, blocked = gather_cooldown.notice_lines(["不存在的魔物"], category="hunt")
+
+        self.assertEqual(lines, [])
+        self.assertEqual(blocked, [])
+
+    def test_unresolvable_specialty_still_gets_a_plan_line(self):
+        """特产那边保持原样：词表是封闭集合，认不出就是名字写错了，值得说一句。"""
+        lines, blocked = gather_cooldown.notice_lines(["去采集没听过的东西"])
+
+        self.assertEqual(blocked, [])
+        self.assertTrue(any(line.startswith("⚠️") for line in lines), lines)
 
 
 class PromptBlockTests(unittest.TestCase):

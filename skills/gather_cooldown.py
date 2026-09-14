@@ -50,6 +50,7 @@ import glob
 import json
 import os
 import re
+import time
 
 import config
 
@@ -353,29 +354,23 @@ def route_totals():
     为什么要它：**防闪退隔离带**会给"没被点名"的材料也打开一条路线（每连续 150 条 Disabled
     强制开一条）。玩家实测的坑：只跑了 1 条隔离带的路线，整种材料就被算成"采过了"、白等 48 小时
     （万相石 1/16、晶化骨髓 1/6、琉鳞石 1/6、星螺 1/5）。所以必须拿"跑了几条 / 一共几条"来判。
+
+    组的来源见 `_group_scan()`：四个资源总组 **+ 玩家自建的魔物 / 材料小组**
+    （蕈兽.json、虹滴晶.json…），这样"打蕈兽"这种目标也有可比的分母。
     """
-    candidates = _collect_group_paths()
-    key = tuple(
-        (category, path, (os.path.getmtime(path) if os.path.isfile(path) else None))
-        for category, path in candidates
-    )
+    key = _group_scan_key(force=_ROUTE_TOTALS_CACHE_KEY.get("key") is None)
     if _ROUTE_TOTALS_CACHE_KEY.get("key") == key:
         return _ROUTE_TOTALS
 
-    totals = {}
-    try:
-        from skills import route_group
-    except Exception:        # noqa: BLE001
+    key, entries = _group_scan()
+    if entries is None:          # 组读不了：保持上次结果
         return _ROUTE_TOTALS
 
-    for _category, path in candidates:
-        if not path or not os.path.isfile(path):
-            continue
-        group = route_group.load_group(path) or {}
-        for project in group.get("projects") or []:
-            material = material_from_project(project)
-            if material and _looks_like_material(material):
-                totals[material] = totals.get(material, 0) + 1
+    totals = {}
+    for _category, _path, project in entries:
+        material = _material_from_project_checked(project)
+        if material and _looks_like_material(material):
+            totals[material] = totals.get(material, 0) + 1
 
     _ROUTE_TOTALS.clear()
     _ROUTE_TOTALS.update(totals)
@@ -421,7 +416,7 @@ def band_enabled():
     return bool(getattr(config, "BGI_FORCE_ENABLE_BAND", True))
 
 
-def status(material, now=None, events=None):
+def status(material, now=None, events=None, category=None, totals=None):
     """单种材料（或魔物）的冷却状态。
 
     返回 {material, category, category_label, hours, last_at, hours_ago, hours_left, cooling,
@@ -435,12 +430,15 @@ def status(material, now=None, events=None):
 
     冷却时长按**材料**定：矿物还按材料分档（铁块 24 / 星银矿石 48 / 水晶块 72…），
     见 `hours_for()`；类别由脚本组决定，见 `category_of()`。
+    `category` 由调用方给定时**以调用方为准** —— 玩家说的是「打蕈兽」时，
+    类别就是魔物（12 小时），不能因为词表里查不到就按特产 48 小时算。
 
-    `events` 可以直接传进来复用（见 `overview()`）。
+    `events` 可以直接传进来复用（见 `overview()`）；`totals` 同理（路线总数表，
+    不传就自己查一次 —— 一次算几十种材料时别让它查几十遍）。
     """
     now = now or datetime.datetime.now()
     material = str(material or "").strip()
-    category = category_of(material)
+    category = str(category or "").strip() or category_of(material)
     hours = hours_for(material, category)
     last = last_collected(material, events=events)
     result = {
@@ -453,7 +451,7 @@ def status(material, now=None, events=None):
         "hours_left": 0.0,
         "cooling": False,
         "known": last is not None,
-        "total_routes": route_totals().get(material, 0),
+        "total_routes": (route_totals() if totals is None else totals).get(material, 0),
         "ran_routes": 0,
         "partial": False,
         "manual": False,
@@ -543,7 +541,7 @@ def overview(now=None):
     manual = load_manual()
 
     names = set(route_material_vocabulary()) | set(manual)
-    rows = [status(name, now=now, events=events) for name in sorted(names)]
+    rows = [status(name, now=now, events=events, totals=totals) for name in sorted(names)]
     rows.sort(key=lambda row: (not row["cooling"], row["hours_left"], -(row["total_routes"] or 0), row["material"]))
 
     summary = {
@@ -635,7 +633,7 @@ def cooling_materials(materials=None):
             if material not in seen:
                 seen.append(material)
         materials = seen
-    results = [status(material) for material in materials]
+    results = [status(material, totals=route_totals()) for material in materials]
     return [result for result in results if result["cooling"]]
 
 
@@ -705,7 +703,11 @@ def _material_from_folder(folder):
 
 
 def material_from_project(project):
-    """从脚本组的一条路线里抠出材料名（先文件名、再目录，见上面两个函数的注释）。"""
+    """从脚本组的一条路线里抠出材料名（先文件名、再目录，见上面两个函数的注释）。
+
+    ⚠️ 索引扫描用的是 `_material_from_project_checked()`：它多一道"文件名读出来的材料
+    得能和目录对上"的校验（否则 `01-那夏镇下方-4个.json` 会被读成地名）。
+    """
     project = project or {}
     return (
         _material_from_route_name(project.get("name"))
@@ -717,6 +719,22 @@ def material_from_project(project):
 _ROUTE_INDEX = {}
 _ROUTE_CATEGORIES = {}
 _ROUTE_INDEX_KEY = {"key": None}
+# `AutoPathing/敌人与魔物/<魔物名>` 的目录名单（按目录 mtime 缓存）
+_ENEMY_NAMES = {"key": None, "names": frozenset()}
+# 组扫描键的短时缓存（见 `_group_scan_key`）：路径指纹 + 上次算出的键 + 算出来的时刻
+_SCAN_KEY_CACHE = {"paths": None, "key": None, "at": 0.0}
+_SCAN_KEY_TTL = 0.5
+
+# 路线目录第一段能当"类目前缀"用的（`矿物\虹滴晶`、`地方特产\须弥\…`）
+FOLDER_CATEGORY_PREFIXES = {
+    "地方特产": CATEGORY_SPECIALTY,
+    "矿物": CATEGORY_MINE,
+    "食材与炼金": CATEGORY_COOK,
+    "敌人与魔物": CATEGORY_HUNT,
+}
+# 这些前缀**故意不分类**：锄地专区是"整张图扫一遍"，不是某种资源的刷新，
+# 它的路线名（`0_0_飞萤`、`精英400`）混进冷却词表只会变成噪音。
+_SKIP_FOLDER_PREFIXES = frozenset({"锄地专区"})
 
 
 def _collect_group_paths():
@@ -732,36 +750,257 @@ def _collect_group_paths():
     )
 
 
-def _refresh_route_index():
-    candidates = _collect_group_paths()
-    key = tuple(
-        (category, path, (os.path.getmtime(path) if os.path.isfile(path) else None))
-        for category, path in candidates
-    )
-    if _ROUTE_INDEX_KEY.get("key") == key:
-        return
+def _enemy_base_dir():
+    """`<AutoPathing>/敌人与魔物` —— BetterGI 路线仓库里魔物的权威目录。"""
+    root = str(getattr(config, "BGI_AUTO_PATHING_DIR", "") or "")
+    return os.path.join(root, "敌人与魔物") if root else ""
 
+
+def enemy_route_names():
+    """魔物名单：`AutoPathing/敌人与魔物/<魔物名>` 这一层目录（按目录 mtime 缓存）。
+
+    为什么要它：**玩家自己按魔物建的小组**（`蕈兽.json` / `骗骗花.json` / `飘浮灵.json`）
+    里，路线目录就是 `蕈兽\\蕈兽@作者`，**没有** `敌人与魔物\\` 这个前缀 ——
+    光看组文件分不出它属于哪一类，于是"打蕈兽"会被判成"认不出"（玩家实测报过）。
+    """
+    base = _enemy_base_dir()
+    key = (base, os.path.getmtime(base) if base and os.path.isdir(base) else None)
+    if _ENEMY_NAMES.get("key") == key:
+        return _ENEMY_NAMES["names"]
+
+    names = set()
+    if base and os.path.isdir(base):
+        try:
+            for entry in os.listdir(base):
+                if os.path.isdir(os.path.join(base, entry)):
+                    names.add(entry)
+        except OSError:
+            names = set()
+    _ENEMY_NAMES["key"] = key
+    _ENEMY_NAMES["names"] = frozenset(names)
+    return _ENEMY_NAMES["names"]
+
+
+def _group_dir_files():
+    """脚本组目录里的 `*.json`：`{文件名: mtime}`（一次 `scandir` 拿全）。
+
+    为什么用 `scandir` + `DirEntry.stat()`：Windows 的目录枚举结果里本来就带着 mtime，
+    实测 0.22ms；换成 `listdir` + 逐个 `getmtime` 是 4ms（近 20 倍）——
+    而这个键会被查几千次（日志里每条路线结束、每种材料的冷却状态都要问一次）。
+    只返回**文件名**（不拼绝对路径）：`abspath` 每次都要规范化当前目录，
+    在几十万次调用下比 scandir 本身还贵。
+    """
+    group_dir = str(getattr(config, "BGI_SCRIPT_GROUP_DIR", "") or "")
+    files = {}
+    if not group_dir or not os.path.isdir(group_dir):
+        return files
+    try:
+        with os.scandir(group_dir) as entries:
+            for entry in entries:
+                if not entry.name.lower().endswith(".json"):
+                    continue
+                try:
+                    if not entry.is_file():
+                        continue
+                    files[entry.name] = entry.stat().st_mtime
+                except OSError:
+                    continue
+    except OSError:
+        return {}
+    return files
+
+
+def _extra_group_names(files=None):
+    """脚本组目录里**其它**组（玩家按魔物 / 材料自己建的那些）的**文件名**。
+
+    为什么必须带上它们：「敌人与魔物」总组里可能只有巡陆艇（玩家只订了这一个），
+    蕈兽 / 骗骗花 / 飘浮灵 都在玩家自建的小组里；只读四个总组的话，
+    这些**说得出口、也真的能跑**的名字会被判成"认不出这种魔物"。
+    """
+    files = _group_dir_files() if files is None else files
+    if not files:
+        return ()
+    skip_names = {
+        os.path.basename(str(getattr(config, key, "") or ""))
+        for key in CATEGORY_CONFIG_KEYS.values()
+    }
+    return tuple(
+        name for name in sorted(files) if name not in skip_names
+    )
+
+
+def _extra_group_paths():
+    """同上，返回完整路径（只在**真的要读组**时调用）。"""
+    group_dir = str(getattr(config, "BGI_SCRIPT_GROUP_DIR", "") or "")
+    if not group_dir:
+        return ()
+    skip = {os.path.abspath(path) for _, path in _collect_group_paths() if path}
+    paths = []
+    for name in _extra_group_names():
+        path = os.path.join(group_dir, name)
+        if os.path.abspath(path) in skip:
+            continue
+        paths.append(path)
+    return tuple(paths)
+
+
+def _group_scan_key(force=False):
+    """只 stat 一遍组文件得到的缓存键（**轻**：不读组文件内容）。
+
+    ⚠️ 别把"读组文件"塞进这里：日志解析会对每一条路线结束事件问一次材料名
+    （`material_for_route`），实测 160 条事件 × 读 29 个组文件 = 36 秒。
+
+    这个函数每秒会被问几百次，所以：
+      · 先比一次**便宜的路径指纹**（配置路径 + 目录名），路径变了立刻重算；
+      · 路径没变时复用 `_SCAN_KEY_TTL` 秒内的结果 —— 组文件内容变化最多晚这么久才被发现，
+        对"小时级"的冷却判定完全无所谓，但对"一条日志几千行"的解析是数量级的差别。
+    """
+    paths = (
+        tuple(str(getattr(config, key, "") or "") for key in CATEGORY_CONFIG_KEYS.values()),
+        str(getattr(config, "BGI_SCRIPT_GROUP_DIR", "") or ""),
+        _enemy_base_dir(),
+    )
+    now = time.monotonic()
+    cache = _SCAN_KEY_CACHE
+    if (
+        not force
+        and cache["key"] is not None
+        and cache["paths"] == paths
+        and now - cache["at"] < _SCAN_KEY_TTL
+    ):
+        return cache["key"]
+
+    dir_files = _group_dir_files()
+    parts = []
+    for category, path in _collect_group_paths():
+        name = os.path.basename(str(path or ""))
+        if name and name in dir_files:
+            mtime = dir_files[name]
+        elif path and os.path.isfile(path):
+            mtime = os.path.getmtime(path)
+        else:
+            mtime = None
+        parts.append((str(category), str(path), mtime))
+    for name in _extra_group_names(dir_files):
+        parts.append(("", name, dir_files.get(name)))
+    base = _enemy_base_dir()
+    parts.append(
+        ("enemy", base, os.path.getmtime(base) if base and os.path.isdir(base) else None)
+    )
+    key = tuple(parts)
+    cache.update({"paths": paths, "key": key, "at": now})
+    return key
+
+
+def reset_caches():
+    """丢掉所有按 mtime 缓存的索引（改过组文件路径/内容之后调用；运行期不用管）。"""
+    _ROUTE_INDEX_KEY["key"] = None
+    _ROUTE_TOTALS_CACHE_KEY["key"] = None
+    _SCAN_KEY_CACHE.update({"paths": None, "key": None, "at": 0.0})
+
+
+def _category_for_project(material, folder):
+    """这条路线属于哪一类资源；**定不出来就给 None**（宁可不查，也别猜错类别）。
+
+    依据依次是：
+    ① 目录第一段的类目前缀（`矿物\\虹滴晶`、`地方特产\\须弥\\…`、`敌人与魔物\\巡陆艇`）；
+    ② 矿物分档表 `MATERIAL_HOURS` 里有的材料（`石珀`、`夜泊石` 这类目录不带前缀的）；
+    ③ `AutoPathing/敌人与魔物/<魔物名>` 的魔物名单（`蕈兽`、`骗骗花`、`飘浮灵`）。
+
+    定不出类别的（狗粮 / 锄大地 / 作者自建的杂组）**不进冷却词表**：
+    它们的路线名（`狗粮`、`精英400`、`01-那夏镇下方`）跑到冷却面板与提示词里没法看。
+    """
+    parts = [part for part in str(folder or "").replace("/", "\\").split("\\") if part]
+    if parts:
+        if parts[0] in _SKIP_FOLDER_PREFIXES:
+            return None
+        category = FOLDER_CATEGORY_PREFIXES.get(parts[0])
+        if category:
+            return category
+
+    material = str(material or "").strip()
+    if not material:
+        return None
+    if material in MATERIAL_HOURS:
+        return CATEGORY_MINE
+    if material in enemy_route_names():
+        return CATEGORY_HUNT
+    return None
+
+
+def _material_from_project_checked(project):
+    """材料名：文件名优先，但**必须能和目录对上**，对不上就以目录为准。
+
+    为什么要这道校验：玩家自建小组里路线文件名常常不带材料名 ——
+    `01-那夏镇下方-4个.json` 挂在 `矿物\\虹滴晶` 下，按"文件名优先"会读出
+    「那夏镇下方」，那是个地名，不是材料。
+    """
+    project = project or {}
+    from_name = _material_from_route_name(project.get("name"))
+    folder = str(project.get("folderName") or "")
+    from_folder = _material_from_folder(folder)
+    if from_name and (not from_folder or from_name == from_folder or from_name in folder):
+        return from_name
+    return from_folder or from_name
+
+
+def _group_scan():
+    """(缓存键, [(类别, 组路径, 路线项目)]) —— 所有"能定出资源类别"的组与路线。
+
+    两类来源：四个资源**总组**（类别由配置直接决定）+ 目录里**其它组**的
+    能定出类别的路线（见 `_category_for_project`）。
+    组文件读不出来时返回 `(键, None)` —— 调用方据此**保持上次结果**，别把索引清空。
+    """
+    key = _group_scan_key()
     try:
         from skills import route_group
     except Exception:        # noqa: BLE001
-        return
+        return key, None
 
-    index, categories = {}, {}
-    for category, path in candidates:
+    entries = []
+    for category, path in _collect_group_paths():
         if not path or not os.path.isfile(path):
             continue
         group = route_group.load_group(path) or {}
         for project in group.get("projects") or []:
-            name = os.path.basename(str(project.get("name") or ""))
-            material = material_from_project(project)
-            if not material:
-                continue
-            if name:
-                index.setdefault(name, material)
-            # 一个材料可能同时出现在多个组里（比如石珀既在矿物组又在特产组）——
-            # 按 CATEGORY_ORDER 的顺序扫，setdefault 保留**先命中的**那个类别（特产优先）。
-            # 时长另有单品覆盖表 MATERIAL_HOURS，所以类别取哪个都不影响矿物按矿种算。
-            categories.setdefault(material, category)
+            entries.append((category, path, project))
+
+    for path in _extra_group_paths():
+        if not os.path.isfile(path):
+            continue
+        group = route_group.load_group(path) or {}
+        for project in group.get("projects") or []:
+            category = _category_for_project(
+                _material_from_project_checked(project), project.get("folderName")
+            )
+            if category:
+                entries.append((category, path, project))
+
+    return key, entries
+
+
+def _refresh_route_index():
+    # 键被手动清空（`reset_caches()` / 测试）→ 强制重扫，不吃那个 0.5 秒的短时缓存
+    key = _group_scan_key(force=_ROUTE_INDEX_KEY.get("key") is None)
+    if _ROUTE_INDEX_KEY.get("key") == key:
+        return
+
+    key, entries = _group_scan()
+    if entries is None:          # 组读不了：保持上次索引，别清空
+        return
+
+    index, categories = {}, {}
+    for category, _path, project in entries:
+        name = os.path.basename(str(project.get("name") or ""))
+        material = _material_from_project_checked(project)
+        if not material:
+            continue
+        if name:
+            index.setdefault(name, material)
+        # 一个材料可能同时出现在多个组里（比如石珀既在矿物组又在特产组）——
+        # 按 CATEGORY_ORDER 的顺序扫，setdefault 保留**先命中的**那个类别（特产优先）。
+        # 时长另有单品覆盖表 MATERIAL_HOURS，所以类别取哪个都不影响矿物按矿种算。
+        categories.setdefault(material, category)
 
     _ROUTE_INDEX.clear()
     _ROUTE_INDEX.update(index)
@@ -811,12 +1050,17 @@ def hours_for(material, category=None):
 
 
 def material_for_route(route_name):
-    """给一个路线文件名，猜出它属于哪种材料（先文件名、再回查脚本组；都没有给空串）。"""
+    """给一个路线文件名，猜出它属于哪种材料（先文件名、再回查脚本组；都没有给空串）。
+
+    ⚠️ 文件名和脚本组**对不上**时以脚本组为准：`01-那夏镇下方-4个.json` 挂在
+    `矿物\\虹滴晶` 下，文件名读出来的是地名 —— 不这么办，这种路线的采集记录会整条丢掉。
+    """
     name = os.path.basename(str(route_name or ""))
-    material = _material_from_route_name(name)
-    if material:
-        return material
-    return route_material_index().get(name, "")
+    from_name = _material_from_route_name(name)
+    known = route_material_index().get(name, "")
+    if known and from_name and known != from_name:
+        return known
+    return from_name or known or ""
 
 
 def route_material_vocabulary(categories=None):
@@ -908,6 +1152,10 @@ def resolve_material(target, category=None):
 
     `category` 给定时**只在这个类别里找**（「刷点蕈兽」不该被当成特产去查），
     并且不会去做"角色名 → 特产"的翻译（那只对特产有意义）。
+
+    词表来自脚本组（见 `_group_scan()`）：四个资源总组 **+ 玩家自建的魔物/材料小组**
+    （蕈兽.json、骗骗花.json、虹滴晶.json…）—— 少了后者，"打蕈兽"会被判成认不出。
+    调用方拿到认不出的目标时**保留**它，并且只在地区特产这一类里提示（见 `notice_lines`）。
     """
     text = str(target or "").strip()
     if not text:
@@ -932,8 +1180,13 @@ def resolve_material(target, category=None):
             return material, ("魔物名（模糊匹配）" if category == CATEGORY_HUNT else "材料名（模糊匹配）")
 
     kind = CATEGORY_KINDS.get(category or CATEGORY_SPECIALTY, "采集物")
-    example = CATEGORY_EXAMPLES.get(category or CATEGORY_SPECIALTY, "霜仙花")
     where = CATEGORY_LABELS.get(category, "地图素材组") if category else "地图素材组"
+    # 例子尽量挑**本机真的能跑**的名字，而且必须和玩家输入的不同 ——
+    # 原来会写成「请直接说魔物名（例如「蕈兽」）」，而他输入的就是「蕈兽」，看着像死循环。
+    example = next(
+        (name for name in sorted(vocabulary) if name and name != text),
+        CATEGORY_EXAMPLES.get(category or CATEGORY_SPECIALTY, "霜仙花"),
+    )
     if category == CATEGORY_HUNT:
         hint = f"本地字典里没有这个角色，也不是{where}里的魔物名 —— 请直接说魔物名（例如「{example}」）"
     else:
@@ -960,6 +1213,12 @@ def notice_lines(targets, category=None):
 
     返回 (lines, blocked_materials)；blocked = 还在冷却、本次不该跑的。
     `category` 会给目标解析限定类别（刷怪时只按魔物名解析，别把「蕈兽」当特产查）。
+
+    ⚠️ 认不出的目标**只有地区特产会提示**：特产词表是"脚本组里 59 种草"这种封闭集合，
+    认不出基本就是名字写错了，值得说一句；而魔物 / 矿物 / 食材这两边的名字是开放的
+    （玩家自建小组、掉落名、地名混着来），我们的词表定不了它是无效目标 ——
+    这时候报「认不出「蕈兽」是哪种魔物（例如「蕈兽」）」只会让人以为指令错了
+    （玩家实测报过这个 bug），所以**静默跳过**，交给下游"找不到路线"去说。
     """
     lines = []
     blocked = []
@@ -967,9 +1226,10 @@ def notice_lines(targets, category=None):
     for target in targets or ():
         material, note = resolve_material(target, category=category)
         if not material:
-            lines.append(f"⚠️ {kind}目标「{target}」：{note}")
+            if category in (None, CATEGORY_SPECIALTY):
+                lines.append(f"⚠️ {kind}目标「{target}」：{note}")
             continue
-        result = status(material)
+        result = status(material, category=category)
         tag = "" if note.startswith(("材料名", "魔物名")) else f"（来自{note}）"
         if result["cooling"]:
             blocked.append(material)

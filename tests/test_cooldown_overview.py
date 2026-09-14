@@ -34,6 +34,10 @@ class OverviewTests(unittest.TestCase):
             }, handle, ensure_ascii=False)
 
         self.manual = os.path.join(self.root, "manual.json")
+        # ⚠️ 脚本组目录 / 路线目录也要指到空目录：冷却词表现在还会扫**玩家自建的小组**
+        #    （蕈兽.json / 骗骗花.json / 虹滴晶.json…），不隔离就会读到开发机真实的组。
+        script_group_dir = os.path.join(self.root, "ScriptGroup")
+        os.makedirs(script_group_dir, exist_ok=True)
         for name, value in (
             ("BGI_LOG_DIR", self.log_dir),
             ("BGI_MAP_CONFIG", group_path),
@@ -42,6 +46,8 @@ class OverviewTests(unittest.TestCase):
             ("BGI_MINE_CONFIG", ""),
             ("BGI_COOK_CONFIG", ""),
             ("BGI_ENEMY_CONFIG", ""),
+            ("BGI_SCRIPT_GROUP_DIR", script_group_dir),
+            ("BGI_AUTO_PATHING_DIR", os.path.join(self.root, "AutoPathing")),
         ):
             patcher = patch.object(config, name, value)
             patcher.start()

@@ -1,9 +1,39 @@
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
 import config
 from brain.llm_brain import ask_agent, build_model_messages
 from skills import mys_api
+
+_TMP = None
+_PATCHERS = []
+
+
+def setUpModule():
+    """把日志目录 / 脚本组目录指到空目录。
+
+    `ask_agent()` 每轮都会调 `cooldown_block()` → `scan_events()` 把最近几天的
+    BetterGI 日志**整个解析一遍**，不隔离的话用例读的是开发机真实的日志：
+    日志一大（跑过锄大地之后动辄几万行）这组用例就要几十秒，而且是机器相关的。
+    """
+    global _TMP
+    _TMP = tempfile.TemporaryDirectory()
+    for name in ("BGI_LOG_DIR", "BGI_SCRIPT_GROUP_DIR", "BGI_AUTO_PATHING_DIR"):
+        value = os.path.join(_TMP.name, name)
+        os.makedirs(value, exist_ok=True)
+        patcher = patch.object(config, name, value)
+        patcher.start()
+        _PATCHERS.append(patcher)
+
+
+def tearDownModule():
+    for patcher in _PATCHERS:
+        patcher.stop()
+    _PATCHERS.clear()
+    if _TMP is not None:
+        _TMP.cleanup()
 
 
 class PromptAssemblyTests(unittest.TestCase):
