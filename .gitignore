@@ -66,6 +66,7 @@ memory/qq_pending_notices.json
 memory/qq_bot.lock
 memory/mys_characters.json
 memory/gather_cooldown_manual.json
+memory/update_check.json
 memory/current_state.json
 memory/target_config.json
 
