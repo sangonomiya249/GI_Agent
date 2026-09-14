@@ -7,6 +7,7 @@
 返回 [(级别, 文案)]，级别取 "ok" / "warn" / "error" / "info"。
 """
 
+import datetime
 import json
 import os
 import subprocess
@@ -376,6 +377,44 @@ def check_close_game():
     return rows
 
 
+def check_update():
+    """版本 / 更新：**只看缓存，不联网**。
+
+    为什么不在体检里联网：doctor 应该是"随时能跑、离线也立刻出结果"的东西；
+    真去问 GitHub 请在 Studio 概览页点「检查更新」或跑 `python main.py update`。
+    """
+    rows = []
+    try:
+        from skills import update_check
+
+        if not getattr(config, "UPDATE_CHECK", True):
+            rows.append(_info("版本检测已关闭（UPDATE_CHECK=0）—— 想看有没有新版就改成 1"))
+            return rows
+
+        local, source = update_check.local_version()
+        rows.append(_info(
+            f"本地版本：{local or '未知'}（{source}）· 检查仓库：{update_check.repo_slug()}"
+        ))
+        cached = update_check.load_cache()
+        if not cached:
+            rows.append(_info("还没检查过更新：跑一次 `python main.py update`，"
+                              "或到 Studio 概览页点「检查更新」"))
+            return rows
+
+        age = update_check._cache_age_hours(cached, datetime.datetime.now())
+        headline = str(cached.get("headline") or "（缓存里没有结论）")
+        when = f"（{age:.1f} 小时前查的）" if isinstance(age, float) else ""
+        if cached.get("update_available"):
+            rows.append(_warn(f"{headline}{when} —— 更新方式：{update_check.update_hint()}"))
+            if cached.get("latest_url"):
+                rows.append(_info(f"发布页：{cached['latest_url']}"))
+        else:
+            rows.append(_ok(f"{headline}{when}"))
+    except Exception as exc:  # noqa: BLE001 - 环境相关
+        rows.append(_info(f"版本信息读不出来（不影响使用）：{exc}"))
+    return rows
+
+
 def check_memory_and_backups():
     """展柜缓存新鲜度 + 配置事务数量。"""
     rows = []
@@ -499,6 +538,7 @@ def run_health_check(env_path=None):
     rows.extend(check_script_groups())
     rows.extend(check_route_sources())
     rows.extend(check_memory_and_backups())
+    rows.extend(check_update())
     return rows
 
 

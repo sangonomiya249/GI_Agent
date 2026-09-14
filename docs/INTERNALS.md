@@ -202,6 +202,34 @@ venv\Scripts\pip uninstall lark_oapi     # 约 37 MB：只有飞书通道才需�
 
 ---
 
+## 版本检测（GitHub release）
+
+`skills/update_check.py`：本地版本 vs 仓库最新 release。为什么不用"比对提交"：
+玩家拿到的多是**解压出来的目录**（没有 `.git`），release 的 tag 是唯一稳定的版本号。
+
+* **本地版本**：仓库根的 `VERSION` 文件（`v1.0.1` / `1.0.1` 都行）优先；没有就退回
+  `git describe --tags --always`（只读，5 秒超时），都拿不到就报"未知"——
+  这时只显示 release 信息、不下"有没有新版"的结论。
+* **比较**：`compare_versions()` → `newer`（有新版）/ `same` / `older`（本地比 tag 还新，例如
+  `v1.0.0-3-gabc1234` 这种"tag 之后又提交了几次"）/ `unknown`。`older` 不会提示更新。
+* **网络**：`GET api.github.com/repos/<owner>/<repo>/releases/latest`（匿名，每小时 60 次）。
+  结果写进 `memory/update_check.json`，`UPDATE_CHECK_HOURS`（默认 6 小时）内复用；
+  `force=True` 忽略缓存。**失败不写缓存**（免得一次断网把结论锁住 6 小时）。
+* **永不阻塞**：离线 / 被墙 / 限流 / 仓库没发布过 release / 甚至 fetch 自己抛异常，
+  都被兜成一条人话（`status="error"`），调用方拿到的永远是能打印的结构。
+  404 会再问一次仓库接口，区分"仓库不存在"和"还没发布过 release"。
+* **只读**：不下载、不改任何文件。更新方式只给命令与链接（git 用户 `git pull`，
+  zip 用户去发布页覆盖；`.env`、`memory\` 别覆盖）。
+* 出口：
+  * `python main.py update [--force] [--json]`（= `python -m skills.update_check`，返回码 1 = 检查失败）；
+  * Studio `GET /api/update`（`?force=1` 重查）→ 概览页「版本与更新」卡；
+  * `python main.py doctor` 里**只读缓存**（doctor 要保持"离线也立刻出结果"），
+    没有缓存就提示"跑一次 main.py update"。
+  * ⚠️ 接口响应里有两个 `ok`：`ok` = 这次请求成了，`check_ok` = 检查本身拿到结论了；
+    检查失败仍返回 200 + `status="error"`，页面照常显示原因（不是 500）。
+
+---
+
 ## 防闪退隔离带
 
 背景：BetterGI 会为脚本组里**每一条 `Disabled` 的路线写一行日志**。几百条的大组在跑一半按停止快捷键时，

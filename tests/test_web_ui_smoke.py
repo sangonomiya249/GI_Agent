@@ -50,6 +50,28 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertIn("✅ 内嵌控制台容器存在", result.stdout)
         self.assertNotIn("❌", result.stdout)
 
+    def test_app_js_renders_the_update_card(self):
+        """概览页的「版本与更新」卡：要能渲染，点「检查更新」还要真的重查一次。"""
+        result = self._run(str(HARNESS))
+
+        self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
+        for line in (
+            "✅ 版本卡：写明本地版本 / 最新 release / 有新版本",
+            "✅ 版本卡：给出发布页链接与更新方式",
+            "✅ 版本卡：贴出更新说明",
+            "✅ 版本卡：点「检查更新」会忽略缓存重查（force=1）",
+        ):
+            self.assertIn(line, result.stdout)
+
+    def test_update_card_elements_exist(self):
+        html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
+        js = APP_JS.read_text(encoding="utf-8")
+
+        self.assertIn('id="dash-update"', html)
+        self.assertIn('id="btn-update-check"', html)
+        self.assertIn("/api/update", js)
+        self.assertIn("loadUpdate", js)
+
     def test_app_js_renders_the_cooldown_page(self):
         """「资源冷却」页：切过去要能渲染出**类别切换 + 该类别自己的表**，点了还要能换。"""
         result = self._run(str(HARNESS))

@@ -638,6 +638,78 @@ class ApiTests(unittest.TestCase):
         self.assertEqual(categories["hoe"]["count"], 1)
         self.assertEqual(categories["hoe"]["label"], "锄大地")
 
+    # ---------- 版本与更新（Studio「概览」页那张卡） ----------
+
+    def test_update_endpoint_reports_the_release(self):
+        """`/api/update` 直接把 `update_check.check()` 的结果给前端；`?force=1` 忽略缓存。
+
+        测试里把 `check` 顶掉：真去问 GitHub 会让用例依赖网络（而且会写真实缓存文件）。
+        """
+        from skills import update_check
+
+        canned = {
+            "ok": True, "status": "newer", "update_available": True,
+            "local_version": "1.0.0", "local_source": "VERSION",
+            "latest_version": "v1.5.0", "latest_name": "修了一堆坑",
+            "latest_url": "https://github.com/sangonomiya249/GI_Agent/releases/tag/v1.5.0",
+            "published_at": "2026-09-15T10:00:00Z", "notes": "· 修了 A",
+            "prerelease": False, "headline": "🎉 有新版本 v1.5.0（本地 1.0.0）",
+            "detail": "GitHub 上是 v1.5.0，本地是 1.0.0", "error": "",
+            "checked_at": "2026-09-15 20:00:00", "from_cache": False,
+            "cache_age_hours": None, "repo": "sangonomiya249/GI_Agent",
+            "update_hint": "在项目目录里执行 git pull",
+        }
+        seen = []
+
+        def fake_check(force=False):
+            seen.append(bool(force))
+            return dict(canned)
+
+        with patch.object(update_check, "check", side_effect=fake_check):
+            data = self.client.get("/api/update").get_json()
+            forced = self.client.get("/api/update?force=1").get_json()
+
+        self.assertTrue(data["ok"])
+        self.assertTrue(data["check_ok"])
+        self.assertTrue(data["update_available"])
+        self.assertEqual(data["latest_version"], "v1.5.0")
+        self.assertIn("有新版本", data["headline"])
+        self.assertEqual(forced["latest_version"], "v1.5.0")
+        self.assertEqual(seen, [False, True])         # 第二次带了 force
+
+    def test_update_endpoint_still_answers_when_the_check_fails(self):
+        """检查失败（离线 / 仓库没发布过 release）不是接口失败：页面要能照常显示原因。"""
+        from skills import update_check
+
+        failed = {
+            "ok": False, "status": "error", "update_available": False,
+            "local_version": "1.0.0", "local_source": "VERSION", "latest_version": "",
+            "latest_name": "", "latest_url": "", "published_at": "", "notes": "",
+            "headline": "📡 检查更新失败：连不上 GitHub（ConnectionError）",
+            "detail": "", "error": "连不上 GitHub（ConnectionError）",
+            "checked_at": "2026-09-15 20:00:00", "from_cache": False, "cache_age_hours": None,
+            "repo": "sangonomiya249/GI_Agent", "update_hint": "……", "prerelease": False,
+        }
+        with patch.object(update_check, "check", return_value=dict(failed)):
+            response = self.client.get("/api/update")
+
+        data = response.get_json()
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(data["ok"])                   # 接口成功
+        self.assertFalse(data["check_ok"])            # 但检查没结论
+        self.assertEqual(data["status"], "error")
+        self.assertIn("连不上 GitHub", data["headline"])
+
+    def test_update_endpoint_survives_a_broken_check(self):
+        """检查更新炸了也不能把页面打成白屏：给一条人话错误就行。"""
+        from skills import update_check
+
+        with patch.object(update_check, "check", side_effect=RuntimeError("boom")):
+            response = self.client.get("/api/update")
+
+        self.assertEqual(response.status_code, 500)
+        self.assertIn("检查更新失败", response.get_json()["error"])
+
     # ---------- 资源冷却页（Studio「资源冷却」） ----------
 
     def _write_map_group(self, projects):

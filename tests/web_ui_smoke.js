@@ -146,6 +146,18 @@ const COOLDOWN = {
 };
 COOLDOWN.materials = COOLDOWN.sections.flatMap((section) => section.materials);
 
+const UPDATE = {
+  ok: true, status: "newer", update_available: true,
+  local_version: "1.0.0", local_source: "VERSION",
+  latest_version: "v1.5.0", latest_name: "修了一堆坑",
+  latest_url: "https://github.com/sangonomiya249/GI_Agent/releases/tag/v1.5.0",
+  published_at: "2026-09-15T10:00:00Z", notes: "· 修了 A\n· 修了 B",
+  prerelease: false, headline: "🎉 有新版本 v1.5.0（本地 1.0.0）",
+  detail: "GitHub 上是 v1.5.0，本地是 1.0.0", error: "",
+  checked_at: "2026-09-15 20:00:00", from_cache: false, cache_age_hours: null,
+  repo: "sangonomiya249/GI_Agent", update_hint: "在项目目录里执行 git pull",
+};
+
 const STATE = {
   ok: true, state: "stopped", pid: null, seq: 0, lines: [], partial: "",
   plan: { lines: ["⚔️ 体力目标：无"] }, project_root: "C:\\proj",
@@ -159,6 +171,7 @@ async function fakeFetch(url) {
   if (url.startsWith("/api/log")) payload = { ok: true, seq: 0, lines: [], partial: "" };
   if (url.startsWith("/api/config")) payload = { ok: true, groups: [] };
   if (url.startsWith("/api/cooldown")) payload = COOLDOWN;
+  if (url.startsWith("/api/update")) payload = UPDATE;
   return { ok: true, status: 200, text: async () => JSON.stringify(payload) };
 }
 
@@ -191,6 +204,9 @@ vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: "app.js" });
     // boot() 是异步的：让 API 的 microtask 跑完
     await settle();
+    // 概览页的「版本与更新」卡（boot 里 switchPage("run")，所以这里手动切过去）
+    sandbox.switchPage("dashboard");
+    await settle();
     // 再切到「资源冷却」页，验证这条链路（/api/cooldown → 分类卡片 + 分区表格）也能渲染
     sandbox.switchPage("cooldown");
     await settle();
@@ -201,6 +217,7 @@ vm.createContext(sandbox);
 
   const channelsPage = captured["chan-cards"] || "";
   const dash = captured["dash-channels"] || "";
+  const updateBox = captured["dash-update"] || "";
   const coolTabs = captured["cooldown-tabs"] || "";
   const coolCards = captured["cooldown-cards"] || "";
   const coolTable = captured["cooldown-table"] || "";
@@ -227,6 +244,20 @@ vm.createContext(sandbox);
   clickTab("specialty");
   const backTable = captured["cooldown-table"] || "";
 
+  // 概览页的「版本与更新」：点「检查更新」要真的再拉一次（force=1）并重新渲染
+  const updateButton = elements.get("btn-update-check");
+  const updateHandler = (updateButton._on.click || [])[0];
+  let forceUsed = false;
+  const originalFetch = sandbox.fetch;
+  sandbox.fetch = async (url, init) => {
+    if (String(url).includes("force=1")) forceUsed = true;
+    return originalFetch(url, init);
+  };
+  if (updateHandler) updateHandler({ target: updateButton });
+  await settle();
+  const updateAfterClick = captured["dash-update"] || "";
+  sandbox.fetch = originalFetch;
+
   const checks = [
     ["通道卡片渲染出来了", channelsPage.includes('data-chan="qq"')],
     ["第二个通道也在", channelsPage.includes('data-chan="feishu"')],
@@ -235,6 +266,13 @@ vm.createContext(sandbox);
     ["未配置通道写明缺哪一项", channelsPage.includes("FEISHU_APP_ID")],
     ["自动启动勾选框", channelsPage.includes("data-chan-auto=\"qq\"")],
     ["概览摘要卡也有内容", dash.includes("QQ 机器人")],
+    ["版本卡：写明本地版本 / 最新 release / 有新版本",
+      updateBox.includes("有新版本") && updateBox.includes("1.0.0") && updateBox.includes("v1.5.0")],
+    ["版本卡：给出发布页链接与更新方式",
+      updateBox.includes("releases/tag/v1.5.0") && updateBox.includes("git pull")],
+    ["版本卡：贴出更新说明", updateBox.includes("修了 A")],
+    ["版本卡：点「检查更新」会忽略缓存重查（force=1）",
+      forceUsed && updateAfterClick.includes("v1.5.0")],
     ["冷却页：顶部有类别切换（特产/矿物/魔物）",
       coolTabs.includes('data-cool-tab="specialty"') && coolTabs.includes('data-cool-tab="mine"')
       && coolTabs.includes('data-cool-tab="hunt"')],

@@ -542,6 +542,30 @@ def create_app(runner=None, env_path=None, channels=None):
             )
         return jsonify({"ok": True, "groups": groups, "categories": categories})
 
+    @app.get("/api/update")
+    def api_update():
+        """版本检查（本地 VERSION vs GitHub 最新 release）。
+
+        `?force=1` 忽略缓存立刻重查（Studio 上点「检查更新」用）；默认吃
+        `UPDATE_CHECK_HOURS`（6 小时）的缓存，免得每次开页面都打 GitHub 的匿名接口。
+
+        ⚠️ 两个 `ok` 不是一回事：接口的 `ok` 表示"这次请求成了"；
+        检查本身的结论看 `status`（`newer`/`same`/`older`/`unknown`/`error`/`disabled`），
+        另有 `check_ok` 是检查模块自己的布尔。检查失败**不是**接口失败（页面照常显示那张卡）。
+        """
+        from skills import update_check
+
+        force = str(request.args.get("force") or "").strip().lower() in ("1", "true", "yes", "on")
+        try:
+            result = update_check.check(force=force)
+        except Exception as exc:            # noqa: BLE001 —— 检查更新永远不该把页面打成 500
+            return _json_error(f"检查更新失败：{type(exc).__name__} {exc}", 500)
+
+        payload = dict(result)
+        payload["check_ok"] = bool(result.get("ok"))
+        payload["ok"] = True
+        return jsonify(payload)
+
     @app.get("/api/cooldown")
     def api_cooldown():
         """四类世界资源的冷却一览（Studio 的「资源冷却」页）。

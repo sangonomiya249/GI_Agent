@@ -138,12 +138,14 @@ rollback <事务ID>   # 直接还原指定事务
 ```bash
 python main.py                      # 终端对话模式
 python main.py doctor               # 环境体检（BetterGI 路径 / 计划任务 / 脚本组 / 展柜缓存）
+python main.py update [--force]     # 检测新版本（GitHub release；--force 忽略 6 小时缓存，--json 给脚本用）
 python main.py repair [--force]     # 清理 Agent 留下的调度器开关与死键（走事务，可回滚）
 python main.py qq [--check]         # QQ 机器人（--check 只验 AppID/Secret）
 python main.py studio               # 打开 Studio
 python main.py gui                  # 旧版 tkinter 控制台
 
 python -m skills.gather_cooldown    # 资源冷却，四类分区（--check / --manual / --clear / --materials / --category）
+python -m skills.update_check       # 检测新版本（--force / --json / --repo owner/repo）
 python -m skills.game_control       # 关闭原神（--close 才真关，可加 --with-bgi）
 python -m skills.mys_api            # 米游社（--check / --refresh / --show 角色名）
 python -m skills.window_focus       # 看游戏窗口 / 前台状态（--focus 才真抢焦点）

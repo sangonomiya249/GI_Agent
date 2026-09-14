@@ -29,6 +29,27 @@ venv\Scripts\python.exe -m pip install -r requirements.txt
 `.env` 不存在或没填。`copy .env.example .env`，至少填 `LLM_PROVIDER` / `OPENAI_API_KEY`（或对应提供商的 key）
 和 `DEFAULT_UID`。只想验证模型通不通：`python scripts/check_llm_config.py`。
 
+---
+
+## 版本与更新
+
+**「检查更新」说失败 / 说"这个仓库还没有发布过 release"**
+只有那一行提示受影响：Agent、Studio、跑图都不需要网络，照常用。几种常见原因：
+* **离线 / 被墙 / 代理没配好** → 文案是 `连不上 GitHub（ConnectionError）`。
+  不想让它碰网络就设 `UPDATE_CHECK=0`（Studio 配置页有这一项）。
+* **`这个仓库还没有发布过 release`** → GitHub 的 Releases 页面确实是空的，不是你的网络问题。
+  维护者发版的顺序：把仓库根的 `VERSION` 改成新版本号 → 在 GitHub 上发布 release，
+  tag 用同名的 `v1.0.1`（本地版本和 tag 就是靠这个对上的）。
+* **限流** → GitHub 匿名接口每小时只有 60 次；程序默认把结果缓存 6 小时（`UPDATE_CHECK_HOURS`），
+  只有点「检查更新」或 `python main.py update --force` 才真的重查。
+* 检查哪个仓库由 `.env` 的 `UPDATE_REPO` 决定（默认 `sangonomiya249/GI_Agent`，fork 了改成自己的）。
+
+**真提示有新版本了，怎么更新？**
+程序**只告诉你**，不会自己下载或改文件：
+* `git clone` 下来的：在项目目录里 `git pull`（有本地改动先 `git stash`）；
+* 下载 zip 的：去 release 页面重新下载，解压覆盖到项目目录 —— **`.env` 与 `memory\` 别覆盖**
+  （配置、密钥、冷却记录、虚拟账本都在里面）。
+
 **改了配置没生效**
 `.env` 是进程启动时读的，改完要重启 Agent / 机器人 / Studio。
 

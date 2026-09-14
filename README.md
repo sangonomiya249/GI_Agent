@@ -10,6 +10,7 @@
 - 💬 **能远程**：终端 / [QQ 机器人](docs/QQ_BOT.md) / 飞书都能指挥，手机上点一下按钮就批准。
 - 🖥️ **有界面**：[GI Agent Studio](docs/STUDIO.md) 一个窗口管配置、审批、日志、体检。
 - 🔒 **不瞎写**：每次改 BetterGI 配置都先备份 + 出 Diff，不满意一条 `rollback` 还原。
+- 🔄 **会看更新**：Studio 概览页 / `python main.py update` 对比 GitHub 上的 release，有新版本会告诉你（只读，不下载）。
 
 > 它不帮你配置 BetterGI，只是**帮你改 BetterGI 的脚本配置并触发一条龙**。
 > 所以「这条路线能不能跑」取决于你在 BetterGI 里已经订阅/建好的脚本组。
@@ -129,6 +130,26 @@ python -m skills.gather_cooldown --materials       # 脚本组里能采的材料
 清单来自你 BetterGI 路线仓库的**全量目录**，不是"上次跑过的那几种"，
 所以没跑过的也在表里，显示为「没有记录（按已刷新处理）」。命令行也可以 `python -m skills.gather_cooldown`。
 实现细节（怎么从日志判定、隔离带为什么会影响判定）见 [内部机制](docs/INTERNALS.md)。
+
+---
+
+## 🔄 检测更新（GitHub release）
+
+```bash
+python main.py update            # 看有没有新版本（等价 python -m skills.update_check）
+python main.py update --force    # 忽略 6 小时缓存，立刻重查
+python main.py update --json     # 给脚本用
+```
+
+Studio「概览」页也有一张**版本与更新**卡：本地版本、最新 release、发布时间、发布页链接、
+更新说明，点「检查更新」忽略缓存重查。**只读** —— 不下载、不改任何文件，要不要更新你自己定：
+git 用户 `git pull`，zip 用户去发布页下载覆盖（`.env` 与 `memory\` 别覆盖）。
+
+* 本地版本取仓库根的 `VERSION`；没有就退回 `git describe --tags`；
+* 离线 / 被墙 / 限流（GitHub 匿名接口每小时 60 次）只影响那一行提示，Agent 照常用；
+* 检查哪个仓库看 `.env` 的 `UPDATE_REPO`（默认 `sangonomiya249/GI_Agent`，fork 了改成自己的）；
+  不想要这个功能就设 `UPDATE_CHECK=0`（完全不会碰网络）。
+* **维护者发版**：把 `VERSION` 改成新版本号 → 在 GitHub 上发布 release，tag 用同名的 `v1.0.1`。
 
 ---
 

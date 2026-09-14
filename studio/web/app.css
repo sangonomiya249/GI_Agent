@@ -860,6 +860,17 @@ kbd {
   .run-sidebar { display: flex; }
 }
 
+/* ---------------- 版本与更新卡 ---------------- */
+#dash-update .row-actions { align-items: center; gap: 8px; flex-wrap: wrap; }
+.link { color: var(--accent); text-decoration: none; word-break: break-all; }
+.link:hover { text-decoration: underline; }
+.update-notes {
+  margin: 8px 0 0; padding: 9px 11px; max-height: 190px; overflow: auto;
+  background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
+  font-family: inherit; font-size: 12px; line-height: 1.6; color: var(--text-dim);
+  white-space: pre-wrap; word-break: break-word;
+}
+
 /* ---------------- 资源冷却页 ---------------- */
 /* 标签里的图标（"冷却中"的那个小时钟）跟着字号走，别比文字还高 */
 .tag .status-icon { margin-right: 2px; }

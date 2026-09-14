@@ -286,3 +286,16 @@ BGI_FORCE_ENABLE_AFTER_DISABLED = get_int_env("BGI_FORCE_ENABLE_AFTER_DISABLED",
 
 DEFAULT_UID = get_env("DEFAULT_UID")
 MAX_HISTORY_MESSAGES = get_int_env("MAX_HISTORY_MESSAGES", 20)
+
+# ==========================================
+# 🌟 版本检测（GitHub release，见 skills/update_check.py）
+# ==========================================
+# 只看 release 信息，不下载、不改文件；离线/被墙/限流都只影响那一行提示。
+# 想彻底关掉（例如完全不想让它碰网络）就设 0。
+UPDATE_CHECK = get_env("UPDATE_CHECK", "1").strip().lower() not in ("0", "false", "no", "off")
+# 检查哪个仓库（fork 出去的人改成自己的 owner/repo）
+UPDATE_REPO = get_env("UPDATE_REPO", "sangonomiya249/GI_Agent").strip()
+# 结果缓存多久（小时）：GitHub 匿名 API 每小时只有 60 次，别每次开页面都问
+UPDATE_CHECK_HOURS = get_int_env("UPDATE_CHECK_HOURS", 6)
+# 单次请求超时（秒）：卡网的时候不要让 Studio 页面跟着卡
+UPDATE_CHECK_TIMEOUT = get_int_env("UPDATE_CHECK_TIMEOUT", 6)

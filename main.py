@@ -392,7 +392,7 @@ def main():
             break
 
 def _handle_startup_command():
-    """命令行一次性命令（不进对话循环）：doctor / repair / qq / studio / gui。
+    """命令行一次性命令（不进对话循环）：doctor / repair / qq / update / studio / gui。
 
     返回 True 表示"已处理完，别再进对话循环"。
     """
@@ -418,6 +418,13 @@ def _handle_startup_command():
 
         rest = [arg for arg in sys.argv[2:] if str(arg).lower() != "qq"]
         raise SystemExit(qq_bot.main(rest))
+
+    if "update" in argv or "--update" in argv:
+        # 版本检查：python main.py update [--force] [--json]
+        from skills import update_check
+
+        rest = [arg for arg in sys.argv[2:] if str(arg).lower() != "update"]
+        raise SystemExit(update_check.main(rest))
 
     if "studio" in argv or "--studio" in argv:
         import app_web

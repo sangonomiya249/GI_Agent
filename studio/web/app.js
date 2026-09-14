@@ -142,6 +142,65 @@ function when(seconds) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
+/* ---------------- 版本与更新 ---------------- */
+const UPDATE_TAGS = {
+  newer: "有新版本", same: "已是最新", older: "本地比 release 新",
+  unknown: "版本号认不出", error: "检查失败", disabled: "检查已关闭",
+};
+
+function renderUpdate(data) {
+  const box = $("#dash-update");
+  if (!box) return;
+  if (!data || !data.ok) {
+    box.innerHTML = `<div class="empty">${escapeHtml((data && data.error) || "读取失败")}</div>`;
+    return;
+  }
+  const status = data.status || "error";
+  const tone = data.update_available ? "warn" : (status === "error" || status === "disabled" ? "dim" : "ok");
+  const parts = [];
+  parts.push(`<div class="row-actions tight">
+      <span class="tag ${tone}">${escapeHtml(UPDATE_TAGS[status] || status)}</span>
+      <span>本地 <b>${escapeHtml(data.local_version || "未知")}</b></span>
+      ${data.latest_version ? `<span class="muted">·</span><span>最新 <b>${escapeHtml(data.latest_version)}</b></span>` : ""}
+      ${data.published_at ? `<span class="muted">${escapeHtml(String(data.published_at).slice(0, 10))} 发布</span>` : ""}
+    </div>`);
+  parts.push(`<div style="margin-top:8px">${escapeHtml(data.headline || "")}</div>`);
+  if (data.detail && (status === "newer" || status === "older" || status === "unknown")) {
+    parts.push(`<div class="muted">${escapeHtml(data.detail)}</div>`);
+  }
+  if (data.latest_url) {
+    parts.push(`<div style="margin-top:6px">发布页：<a class="link" href="${escapeHtml(data.latest_url)}" target="_blank" rel="noreferrer">${escapeHtml(data.latest_url)}</a></div>`);
+  }
+  if (status === "newer") {
+    parts.push(`<div class="hint">更新方式：${escapeHtml(data.update_hint || "")}</div>`);
+  }
+  if (data.notes) {
+    parts.push(`<pre class="update-notes">${escapeHtml(data.notes)}</pre>`);
+  }
+  if (data.from_cache) {
+    const age = typeof data.cache_age_hours === "number" ? `${data.cache_age_hours.toFixed(1)} 小时前` : "之前";
+    parts.push(`<div class="hint">结果来自缓存（${escapeHtml(age)}查的）；点「检查更新」立刻重查。</div>`);
+  }
+  if (status === "error") {
+    parts.push(`<div class="hint">只有这一张卡受影响：Agent / Studio / 跑图都不需要网络，照常用。</div>`);
+  }
+  box.innerHTML = parts.join("");
+}
+
+async function loadUpdate(force = false) {
+  const box = $("#dash-update");
+  if (box && force) box.innerHTML = `<div class="empty">正在问 GitHub…</div>`;
+  const data = await api(`/api/update${force ? "?force=1" : ""}`);
+  renderUpdate(data);
+}
+
+function setupUpdateCard() {
+  const button = $("#btn-update-check");
+  if (button && button.addEventListener) {
+    button.addEventListener("click", () => loadUpdate(true));
+  }
+}
+
 /* ---------------- 导航 ---------------- */
 function switchPage(page) {
   state.page = page;
@@ -156,7 +215,7 @@ function switchPage(page) {
   if (page === "logs") loadBgiLog();
   if (page === "routes") loadRoutes();
   if (page === "cooldown") loadCooldown();
-  if (page === "dashboard") loadBgiLog(true);
+  if (page === "dashboard") { loadBgiLog(true); loadUpdate(); }
   if (page === "channels") pollChannels();
 }
 
@@ -1091,6 +1150,7 @@ function bindEvents() {
   $("#log-file").addEventListener("change", () => loadBgiLog());
   $("#log-keyword").addEventListener("keydown", (event) => { if (event.key === "Enter") loadBgiLog(); });
   $("#dash-log-refresh").addEventListener("click", () => loadBgiLog(true));
+  setupUpdateCard();
 
   $("#modal-close").addEventListener("click", closeModal);
   $("#modal-mask").addEventListener("click", (event) => { if (event.target.id === "modal-mask") closeModal(); });

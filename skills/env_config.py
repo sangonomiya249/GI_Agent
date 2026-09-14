@@ -159,6 +159,21 @@ FIELD_GROUPS = (
         ),
     ),
     FieldGroup(
+        "版本与更新（可选）",
+        (
+            Field("UPDATE_CHECK", "检测新版本", "bool", (), "1",
+                  "1=在 Studio 概览页显示版本、并可以去 GitHub 看有没有新 release（也可以 "
+                  "`python main.py update`）。只读 release 信息，不下载、不改文件；"
+                  "离线时只是那一行提示失败，不影响 Agent。设 0 = 完全不碰网络。"),
+            Field("UPDATE_REPO", "检查哪个仓库", "text", (), "sangonomiya249/GI_Agent",
+                  "写成 owner/repo。fork 出去以后改这里，就能检查自己的仓库。"),
+            Field("UPDATE_CHECK_HOURS", "结果缓存（小时）", "int", (), "6",
+                  "GitHub 匿名接口每小时只有 60 次，所以检查结果会缓存这么久（点「检查更新」会忽略缓存）。"),
+            Field("UPDATE_CHECK_TIMEOUT", "请求超时（秒）", "int", (), "6",
+                  "卡网时不要让 Studio 页面跟着卡住。"),
+        ),
+    ),
+    FieldGroup(
         "QQ 机器人（可选）",
         (
             Field("QQ_BOT_APPID", "AppID", "secret", (), "",
