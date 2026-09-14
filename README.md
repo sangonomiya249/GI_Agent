@@ -149,7 +149,8 @@ git 用户 `git pull`，zip 用户去发布页下载覆盖（`.env` 与 `memory\
 * 离线 / 被墙 / 限流（GitHub 匿名接口每小时 60 次）只影响那一行提示，Agent 照常用；
 * 检查哪个仓库看 `.env` 的 `UPDATE_REPO`（默认 `sangonomiya249/GI_Agent`，fork 了改成自己的）；
   不想要这个功能就设 `UPDATE_CHECK=0`（完全不会碰网络）。
-* **维护者发版**：把 `VERSION` 改成新版本号 → 在 GitHub 上发布 release，tag 用同名的 `v1.0.1`。
+* **维护者发版**：改 `VERSION` → 在 GitHub 上发布 release，tag 用同名的 `v1.0.1`
+  （逐步操作与注意事项见 [发一个新版本](docs/RELEASE.md)）。
 
 ---
 
@@ -164,6 +165,7 @@ git 用户 `git pull`，zip 用户去发布页下载覆盖（`.env` 与 `memory\
 | [QQ 机器人](docs/QQ_BOT.md) · [米游社 cookie](docs/MYS_COOKIE.md) | 手机远程控制 · 查展柜外的角色 |
 | [配置恢复](docs/CONFIG_RECOVERY.md) | 事务、Diff、`rollback` |
 | [排错 FAQ](docs/TROUBLESHOOTING.md) | BGI 卡死 / 崩溃 / 关不掉 / 讨伐弹窗 / 白开一次 BGI … |
+| [发一个新版本](docs/RELEASE.md) | 维护者用：改 `VERSION`、打 tag、发 release、验证 |
 | [内部机制](docs/INTERNALS.md) | 架构与目录、日志判定、防闪退隔离带、冷却判定细节（开发者向） |
 
 ---
