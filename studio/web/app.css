@@ -866,13 +866,15 @@ kbd {
 .tag .status-icon svg { width: 12px; height: 12px; }
 #cooldown-table td { vertical-align: middle; }
 #cooldown-table .row-actions { gap: 6px; }
-/* 类别小标题行（地区特产 / 矿物 / 食材与炼金 / 敌人与魔物） */
-.table tr.table-group td {
-  background: color-mix(in srgb, var(--accent) 7%, transparent);
-  border-top: 1px solid var(--border);
-  padding: 9px 12px;
-  line-height: 1.5;
+/* 类别切换（地区特产 / 矿物 / 食材与炼金 / 敌人与魔物） */
+.cooldown-tabs { margin-bottom: 14px; }
+.cooldown-tabs .chip.active {
+  background: var(--accent-soft);
+  border-color: color-mix(in srgb, var(--accent) 40%, var(--border));
+  color: var(--text);
+  font-weight: 600;
 }
-.table tr.table-group b { margin-right: 6px; }
-.table tr.table-group .muted { font-weight: 400; }
+.cooldown-tabs .chip .muted { font-weight: 400; }
+.cooldown-tabs .chip .tag { margin-left: 4px; padding: 1px 7px; font-size: 11px; }
+#cooldown-foot { line-height: 1.7; }
 

@@ -51,18 +51,24 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertNotIn("❌", result.stdout)
 
     def test_app_js_renders_the_cooldown_page(self):
-        """「采集冷却」页：切过去要能真渲染出**分类**汇总卡与分区表格。"""
+        """「资源冷却」页：切过去要能渲染出**类别切换 + 该类别自己的表**，点了还要能换。"""
         result = self._run(str(HARNESS))
 
         self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
         for line in (
-            "✅ 采集冷却：每个类别一张卡（特产/矿物/魔物都在）",
-            "✅ 采集冷却：卡片写明各类刷新时长",
-            "✅ 采集冷却：表格按类别分区（有小标题行）",
-            "✅ 采集冷却：冷却中的目标带剩余时间",
-            "✅ 采集冷却：部分完成标注出来了",
-            "✅ 采集冷却：没有记录的显示可以去",
-            "✅ 采集冷却：每行都有登记/清除按钮",
+            "✅ 冷却页：顶部有类别切换（特产/矿物/魔物）",
+            "✅ 冷却页：默认选中地区特产",
+            "✅ 冷却页：类别 chip 带冷却中角标",
+            "✅ 冷却页：汇总卡只统计当前类别",
+            "✅ 冷却页：表格只显示当前类别",
+            "✅ 冷却页：冷却中的目标带剩余时间",
+            "✅ 冷却页：部分完成标注出来了",
+            "✅ 冷却页：每行都有登记/清除按钮",
+            "✅ 冷却页：页脚写明这一类没建组的材料",
+            "✅ 点「敌人与魔物」→ 表格换成魔物的",
+            "✅ 点「敌人与魔物」→ 卡片/标题/chip 高亮都跟着换",
+            "✅ 点「矿物」→ 显示矿物，页脚列出没建组的矿",
+            "✅ 点回「地区特产」→ 恢复特产的表",
         ):
             self.assertIn(line, result.stdout)
 
@@ -106,21 +112,24 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertIn('data-page="channels"', html)
 
     def test_cooldown_page_elements_exist(self):
-        """「采集冷却」页的骨架 + 接口调用都要在（少一个 id，点进去就是白屏/报错）。"""
+        """「资源冷却」页的骨架 + 接口调用都要在（少一个 id，点进去就是白屏/报错）。"""
         html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
         js = APP_JS.read_text(encoding="utf-8")
+        css = (PROJECT_ROOT / "studio" / "web" / "app.css").read_text(encoding="utf-8")
 
         self.assertIn('data-page="cooldown"', html)
         for element_id in (
-            "cooldown-cards", "cooldown-table", "cooldown-hint",
+            "cooldown-tabs", "cooldown-title", "cooldown-cards", "cooldown-table",
+            "cooldown-hint", "cooldown-foot",
             "cooldown-search", "cooldown-only-cooling", "btn-cooldown-reload",
         ):
             self.assertIn(f'id="{element_id}"', html, element_id)
         self.assertIn("/api/cooldown", js)
         self.assertIn("cooldown: [", js)          # PAGE_META 里有这一页，标题栏才对
         self.assertIn("loadCooldown", js)
-        self.assertIn("table-group", js)          # 表格按类别分区
-        self.assertIn("table-group", (PROJECT_ROOT / "studio" / "web" / "app.css").read_text(encoding="utf-8"))
+        self.assertIn("data-cool-tab", js)        # 点类别切换（特产/矿物/食材/魔物）
+        self.assertIn("unsubscribed", js)         # 页脚会列"仓库里有、你没建组"的材料
+        self.assertIn(".cooldown-tabs", css)
 
 
 if __name__ == "__main__":

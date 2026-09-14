@@ -495,8 +495,9 @@ def status(material, now=None, events=None, category=None, totals=None):
 def category_sections(rows):
     """把 `status()` 的结果按类别分组（Studio 页面 / CLI 都用它排版）。
 
-    返回 [{key, label, hours, note, materials:[...], summary:{...}}]，顺序固定为
-    地区特产 → 矿物 → 食材与炼金 → 敌人与魔物；每个类别内部：**冷却中的在前**。
+    返回 [{key, label, hours, note, materials:[...], summary:{...}, unsubscribed:[...]}]，
+    顺序固定为地区特产 → 矿物 → 食材与炼金 → 敌人与魔物；每个类别内部：**冷却中的在前**。
+    `unsubscribed` = 这一类里"路线仓库下载了、但脚本组里没有"的材料（只做提示）。
     """
     sections = []
     for category in CATEGORY_ORDER:
@@ -513,6 +514,7 @@ def category_sections(rows):
             "default_hours": category_default_hours(category),
             "note": CATEGORY_NOTES.get(category, ""),
             "materials": items,
+            "unsubscribed": unsubscribed_materials(category),
             "summary": {
                 "total": len(items),
                 "cooling": sum(1 for row in items if row["cooling"]),
@@ -735,6 +737,16 @@ FOLDER_CATEGORY_PREFIXES = {
 # 这些前缀**故意不分类**：锄地专区是"整张图扫一遍"，不是某种资源的刷新，
 # 它的路线名（`0_0_飞萤`、`精英400`）混进冷却词表只会变成噪音。
 _SKIP_FOLDER_PREFIXES = frozenset({"锄地专区"})
+# 路线仓库（`AutoPathing/<类目目录>`）里，材料在第几层：地方特产多一层"地区"
+PATHING_CATEGORY_DIRS = {
+    CATEGORY_SPECIALTY: "地方特产",
+    CATEGORY_MINE: "矿物",
+    CATEGORY_COOK: "食材与炼金",
+    CATEGORY_HUNT: "敌人与魔物",
+}
+# 路线仓库里这些目录不是材料：整包脚本（「提瓦特食材一条龙」）之类
+_NOT_MATERIAL_WORDS = ("一条龙", "路线", "专区", "推荐")
+_PATHING_CACHE = {"key": None, "names": {}}
 
 
 def _collect_group_paths():
@@ -754,6 +766,84 @@ def _enemy_base_dir():
     """`<AutoPathing>/敌人与魔物` —— BetterGI 路线仓库里魔物的权威目录。"""
     root = str(getattr(config, "BGI_AUTO_PATHING_DIR", "") or "")
     return os.path.join(root, "敌人与魔物") if root else ""
+
+
+def _subdir_names(path):
+    """一个目录下的子目录名（没有就返回空集合）。"""
+    if not path or not os.path.isdir(path):
+        return set()
+    try:
+        return {
+            entry.name
+            for entry in os.scandir(path)
+            if entry.is_dir()
+        }
+    except OSError:
+        return set()
+
+
+def _clean_pathing_name(name):
+    """路线仓库的目录名 → 材料名：去掉引号与「（推荐胡桃）」这类备注。"""
+    text = re.sub(r"[「」『』“”\"]", "", str(name or "").strip())
+    text = re.sub(r"[（(][^）)]*[）)]", "", text).strip()
+    return _canonical_material(text)
+
+
+def pathing_materials_all():
+    """{类别: {材料名}} —— **路线仓库里下载了路线的**材料（`AutoPathing/地方特产/<地区>/<材料>`…）。
+
+    用途：回答"冷却面板为什么只有这几种"。玩家实测：食材与炼金只列出久雨莲，
+    而 `AutoPathing/食材与炼金` 下有 61 个材料目录 —— 不是读不到，
+    是**他的脚本组里只有久雨莲的路线**（Agent 只能开关脚本组里的路线）。
+    所以这类材料只做提示（`unsubscribed_materials()`），不进冷却表。
+    """
+    root = str(getattr(config, "BGI_AUTO_PATHING_DIR", "") or "")
+    if not root or not os.path.isdir(root):
+        return {}
+
+    key_parts, names = [], {}
+    for category, folder in PATHING_CATEGORY_DIRS.items():
+        base = os.path.join(root, folder)
+        if not os.path.isdir(base):
+            key_parts.append((base, None))
+            continue
+        key_parts.append((base, os.path.getmtime(base)))
+        found = _subdir_names(base)
+        if category == CATEGORY_SPECIALTY:
+            # 地方特产：`地方特产/<地区>/<材料>`，材料在第二层
+            materials = set()
+            for region in found:
+                region_dir = os.path.join(base, region)
+                key_parts.append((region_dir, os.path.getmtime(region_dir)))
+                materials.update(_subdir_names(region_dir))
+        else:
+            materials = found
+        names[category] = {
+            name for name in (_clean_pathing_name(item) for item in materials)
+            if name and _looks_like_material(name)
+            and not any(word in name for word in _NOT_MATERIAL_WORDS)
+        }
+
+    key = tuple(key_parts)
+    if _PATHING_CACHE.get("key") != key:
+        _PATHING_CACHE["key"] = key
+        _PATHING_CACHE["names"] = names
+    return _PATHING_CACHE["names"]
+
+
+def pathing_materials(category):
+    """这一类"路线仓库里下载了路线"的材料名（排序后）。"""
+    return sorted(pathing_materials_all().get(str(category or ""), set()))
+
+
+def unsubscribed_materials(category):
+    """这一类里"仓库里有路线、但你的脚本组里没有"的材料。
+
+    它们在面板上只当提示：**没有组就没有路线可开关**，Agent 也跑不了
+    （能跑什么取决于你在 BetterGI 里订阅/建好的组）。
+    """
+    known = route_material_vocabulary((category,))
+    return [name for name in pathing_materials(category) if name not in known]
 
 
 def enemy_route_names():

@@ -586,6 +586,8 @@ def create_app(runner=None, env_path=None, channels=None):
                 "hours": section["hours"],
                 "note": section["note"],
                 "summary": section["summary"],
+                # 这一类"路线仓库下载了、但脚本组里没有"的材料（Agent 跑不了，页面只做提示）
+                "unsubscribed": list(section.get("unsubscribed") or []),
                 "materials": [serialize(row) for row in section["materials"]],
             }
             for section in data["sections"]

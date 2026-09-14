@@ -651,12 +651,19 @@ class ApiTests(unittest.TestCase):
         return group_dir, path
 
     def _cooldown_env(self):
-        """把资源冷却相关的路径都指到临时目录（别读开发机真实的日志/组）。"""
+        """把资源冷却相关的路径都指到临时目录（别读开发机真实的日志/组/路线仓库）。"""
         manual = self.root / "gather_cooldown_manual.json"
         log_dir = self.root / "bgi-log"
         log_dir.mkdir(exist_ok=True)
+        pathing = self.root / "AutoPathing"
+        pathing.mkdir(exist_ok=True)
+        try:
+            gather_cooldown._PATHING_CACHE.update({"key": None, "names": {}})
+        except AttributeError:
+            pass
         patches = [
             patch.object(config, "BGI_LOG_DIR", str(log_dir)),
+            patch.object(config, "BGI_AUTO_PATHING_DIR", str(pathing)),
             patch.object(gather_cooldown, "manual_state_path", return_value=str(manual)),
             patch.object(gather_cooldown, "_ROUTE_TOTALS_CACHE_KEY", {"key": None}),
             patch.object(gather_cooldown, "_ROUTE_INDEX_KEY", {"key": None}),
@@ -664,6 +671,33 @@ class ApiTests(unittest.TestCase):
         for item in patches:
             item.start()
             self.addCleanup(item.stop)
+
+    def test_cooldown_endpoint_lists_what_is_not_in_any_group(self):
+        """页脚那句"仓库里有、你没建组"：接口要真的把材料名带出来。
+
+        玩家实测问过"食材与炼金怎么只有一个久雨莲，是读不到吗" ——
+        不是读不到，是他的脚本组里只有久雨莲；这里把两者的差集给出来。
+        """
+        group_dir, group_path = self._write_map_group([
+            {"name": "01-久雨莲-厄里那斯-7个.json",
+             "folderName": "食材与炼金\\久雨莲", "type": "Pathing"},
+        ])
+        pathing = self.root / "AutoPathing" / "食材与炼金"
+        for name in ("久雨莲", "甜甜花", "薄荷", "提瓦特食材一条龙"):
+            (pathing / name).mkdir(parents=True, exist_ok=True)
+        self._cooldown_env()
+
+        with patch.object(config, "BGI_SCRIPT_GROUP_DIR", str(group_dir)), patch.object(
+            config, "BGI_COOK_CONFIG", str(group_path)
+        ), patch.object(config, "BGI_MAP_CONFIG", ""), patch.object(
+            config, "BGI_MINE_CONFIG", ""
+        ), patch.object(config, "BGI_ENEMY_CONFIG", ""):
+            data = self.client.get("/api/cooldown").get_json()
+
+        section = next(item for item in data["sections"] if item["key"] == "cook")
+        self.assertIn("久雨莲", [row["material"] for row in section["materials"]])
+        # 仓库里有、组里没有的：甜甜花 / 薄荷；整包脚本「一条龙」不算材料，久雨莲已建组
+        self.assertEqual(section["unsubscribed"], ["甜甜花", "薄荷"])
 
     def test_cooldown_endpoint_lists_materials_with_status(self):
         group_dir, group_path = self._write_map_group([

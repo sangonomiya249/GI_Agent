@@ -27,8 +27,9 @@ function makeEl(id = "") {
     dataset: {},
     style: {},
     childNodes: [],
+    _on: {},
     classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
-    addEventListener() {},
+    addEventListener(type, handler) { (this._on[type] = this._on[type] || []).push(handler); },
     appendChild(child) { this.childNodes.push(child); return child; },
     removeChild(child) { this.childNodes = this.childNodes.filter((c) => c !== child); },
     remove() {},
@@ -103,6 +104,7 @@ const COOLDOWN = {
     {
       key: "specialty", label: "地区特产", hours: 48, note: "wiki：采集后 48 小时刷新",
       summary: { total: 2, cooling: 1, ready: 1, partial: 1, manual: 0 },
+      unsubscribed: [],
       materials: [
         material({
           material: "霜仙花", category: "specialty", category_label: "地区特产", hours: 48,
@@ -121,6 +123,7 @@ const COOLDOWN = {
     {
       key: "mine", label: "矿物", hours: 72, note: "水晶块 / 紫晶块：上次刷新后的第三日",
       summary: { total: 1, cooling: 0, ready: 1, partial: 0, manual: 0 },
+      unsubscribed: ["星银矿石", "铁块"],
       materials: [
         material({
           material: "水晶块", category: "mine", category_label: "矿物", hours: 72,
@@ -131,6 +134,7 @@ const COOLDOWN = {
     {
       key: "hunt", label: "敌人与魔物", hours: 12, note: "普通魔物 12 小时刷新",
       summary: { total: 1, cooling: 0, ready: 1, partial: 0, manual: 1 },
+      unsubscribed: ["蕈兽", "骗骗花"],
       materials: [
         material({
           material: "巡陆艇", category: "hunt", category_label: "敌人与魔物", hours: 12,
@@ -200,8 +204,31 @@ vm.createContext(sandbox);
 
   const channelsPage = captured["chan-cards"] || "";
   const dash = captured["dash-channels"] || "";
+  const coolTabs = captured["cooldown-tabs"] || "";
   const coolCards = captured["cooldown-cards"] || "";
   const coolTable = captured["cooldown-table"] || "";
+  const coolFoot = captured["cooldown-foot"] || "";
+  const titleEl = elements.get("cooldown-title");
+
+  // 点一下类别 chip（app.js 用事件委托接的），验证"点哪个类别就显示哪个类别"
+  function clickTab(key) {
+    const tab = elements.get("cooldown-tabs");
+    const handler = (tab._on.click || [])[0];
+    if (!handler) return false;
+    handler({ target: { closest: () => ({ dataset: { coolTab: key } }) } });
+    return true;
+  }
+
+  const clicked = clickTab("hunt");
+  const huntCards = captured["cooldown-cards"] || "";
+  const huntTable = captured["cooldown-table"] || "";
+  const huntTabs = captured["cooldown-tabs"] || "";
+  const huntTitle = titleEl ? titleEl.textContent : "";
+  clickTab("mine");
+  const mineTable = captured["cooldown-table"] || "";
+  const mineFoot = captured["cooldown-foot"] || "";
+  clickTab("specialty");
+  const backTable = captured["cooldown-table"] || "";
 
   const checks = [
     ["通道卡片渲染出来了", channelsPage.includes('data-chan="qq"')],
@@ -211,17 +238,28 @@ vm.createContext(sandbox);
     ["未配置通道写明缺哪一项", channelsPage.includes("FEISHU_APP_ID")],
     ["自动启动勾选框", channelsPage.includes("data-chan-auto=\"qq\"")],
     ["概览摘要卡也有内容", dash.includes("QQ 机器人")],
-    ["采集冷却：每个类别一张卡（特产/矿物/魔物都在）",
-      coolCards.includes("地区特产") && coolCards.includes("矿物") && coolCards.includes("敌人与魔物")],
-    ["采集冷却：卡片写明各类刷新时长",
-      coolCards.includes("刷新 48 小时") && coolCards.includes("刷新 72 小时") && coolCards.includes("刷新 12 小时")],
-    ["采集冷却：表格按类别分区（有小标题行）",
-      coolTable.includes("table-group") && coolTable.includes("地区特产") && coolTable.includes("刷新 48 小时")],
-    ["采集冷却：冷却中的目标带剩余时间", coolTable.includes("霜仙花") && coolTable.includes("还要 20 小时 30 分")],
-    ["采集冷却：部分完成标注出来了", coolTable.includes("慕风蘑菇") && coolTable.includes("部分完成")],
-    ["采集冷却：没有记录的显示可以去", coolTable.includes("水晶块") && coolTable.includes("可以去")],
-    ["采集冷却：每行都有登记/清除按钮",
+    ["冷却页：顶部有类别切换（特产/矿物/魔物）",
+      coolTabs.includes('data-cool-tab="specialty"') && coolTabs.includes('data-cool-tab="mine"')
+      && coolTabs.includes('data-cool-tab="hunt"')],
+    ["冷却页：默认选中地区特产", coolTabs.includes('class="chip active" data-cool-tab="specialty"')],
+    ["冷却页：类别 chip 带冷却中角标", coolTabs.includes("冷却 1")],
+    ["冷却页：汇总卡只统计当前类别",
+      coolCards.includes("地区特产 · 冷却中") && coolCards.includes("这一类共 2 项 · 刷新 48 小时")
+      && !coolCards.includes("敌人与魔物 · 冷却中")],
+    ["冷却页：表格只显示当前类别",
+      coolTable.includes("霜仙花") && !coolTable.includes("水晶块") && !coolTable.includes("巡陆艇")],
+    ["冷却页：冷却中的目标带剩余时间", coolTable.includes("还要 20 小时 30 分")],
+    ["冷却页：部分完成标注出来了", coolTable.includes("慕风蘑菇") && coolTable.includes("部分完成")],
+    ["冷却页：每行都有登记/清除按钮",
       coolTable.includes('data-cool-mark="霜仙花"') && coolTable.includes('data-cool-clear="霜仙花"')],
+    ["冷却页：页脚写明这一类没建组的材料", coolFoot.includes("都建过组了")],
+    ["点「敌人与魔物」→ 表格换成魔物的", clicked && huntTable.includes("巡陆艇") && !huntTable.includes("霜仙花")],
+    ["点「敌人与魔物」→ 卡片/标题/chip 高亮都跟着换",
+      huntCards.includes("敌人与魔物 · 冷却中") && huntTitle.includes("敌人与魔物")
+      && huntTabs.includes('class="chip active" data-cool-tab="hunt"')],
+    ["点「矿物」→ 显示矿物，页脚列出没建组的矿",
+      mineTable.includes("水晶块") && !mineTable.includes("巡陆艇") && mineFoot.includes("星银矿石")],
+    ["点回「地区特产」→ 恢复特产的表", backTable.includes("霜仙花") && !backTable.includes("水晶块")],
   ];
 
   let failed = 0;

@@ -19,10 +19,14 @@ const state = {
   channels: [],          // 远程通道摘要（来自 /api/state）
   chanSeq: {},           // 各通道日志游标 { qq: 12, feishu: 0 }
   chanLines: {},         // 已渲染的行数（只用于控制 DOM 体积）
-  cooldown: null,        // 采集冷却（/api/cooldown 的最近一次结果）
+  cooldown: null,        // 资源冷却（/api/cooldown 的最近一次结果）
+  cooldownCategory: "specialty",   //   当前看的是哪一类（点上面的类别 chip 切换）
   cooldownSearch: "",    //   页面上的筛选条件
   cooldownOnlyCooling: false,
 };
+
+/** 冷却页每个类别的图标（"地区特产"用叶子、"矿物"用地图…）。 */
+const COOLDOWN_ICONS = { specialty: "leaf", mine: "map", cook: "book", hunt: "spark" };
 
 const ICONS = {
   layout: '<svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>',
@@ -591,7 +595,7 @@ function cooldownStatusTag(row) {
   return `<span class="tag ok">可以去</span>`;
 }
 
-/** 一个类别里的行；没有匹配的返回 null（好让调用方整块跳过）。 */
+/** 一个类别里的行；没有匹配的返回空串（好让调用方整块跳过）。 */
 function cooldownRows(rows) {
   const keyword = (state.cooldownSearch || "").trim();
   const onlyCooling = Boolean(state.cooldownOnlyCooling);
@@ -599,7 +603,7 @@ function cooldownRows(rows) {
     if (onlyCooling && !row.cooling) return false;
     return !keyword || row.material.includes(keyword);
   });
-  if (!filtered.length) return null;
+  if (!filtered.length) return "";
   return filtered.map((row) => {
     const routes = row.total_routes
       ? `${row.ran_routes}/${row.total_routes} 条`
@@ -621,32 +625,98 @@ function cooldownRows(rows) {
   }).join("");
 }
 
-/** 表格体：按类别分块（地区特产 / 矿物 / 食材与炼金 / 敌人与魔物），每块一个小标题行。 */
-function cooldownTableBody(sections) {
+/** 当前选中的类别（点了别的类别就换一个；默认地区特产）。 */
+function activeCooldownSection() {
+  const sections = (state.cooldown && state.cooldown.sections) || [];
+  return sections.find((section) => section.key === state.cooldownCategory) || sections[0] || null;
+}
+
+/** 顶部的类别切换（每个类别一个 chip，带"冷却中"角标）。 */
+function cooldownTabs(sections) {
+  return sections.map((section) => {
+    const stats = section.summary || {};
+    const active = section.key === state.cooldownCategory;
+    const badge = stats.cooling
+      ? ` <span class="tag warn">冷却 ${stats.cooling}</span>`
+      : "";
+    return `<button class="chip${active ? " active" : ""}" data-cool-tab="${escapeHtml(section.key)}">
+      ${escapeHtml(section.label)} <span class="muted">${stats.total || 0}</span>${badge}
+    </button>`;
+  }).join("");
+}
+
+/** 汇总卡：只统计**当前类别**（加上一张判定依据）。 */
+function cooldownCards(section, data) {
+  if (!section) return "";
+  const stats = section.summary || {};
+  const icon = COOLDOWN_ICONS[section.key] || "leaf";
+  return [
+    statCard({
+      label: `${section.label} · 冷却中`,
+      value: `${stats.cooling || 0} 项`,
+      tone: stats.cooling ? "warn" : "ok",
+      sub: `这一类共 ${stats.total || 0} 项 · 刷新 ${section.hours} 小时`,
+      icon,
+    }),
+    statCard({
+      label: "可以去",
+      value: `${stats.ready || 0} 项`,
+      sub: "已刷新 / 没有记录",
+      icon: "pulse",
+    }),
+    statCard({
+      label: "部分完成",
+      value: `${stats.partial || 0} 项`,
+      tone: stats.partial ? "warn" : "",
+      sub: `只跑了零星几条 → 不算跑完（门槛 ${data.min_route_percent}%）`,
+      icon: "clock",
+    }),
+    statCard({
+      label: "手动登记",
+      value: `${stats.manual || 0} 项`,
+      sub: "游戏里自己采过、日志里没有的",
+      icon: "check",
+    }),
+    statCard({
+      label: "判定依据",
+      value: data.band_enabled ? "按路线比例" : "正常冷却",
+      sub: `${section.note || ""}${data.band_enabled ? " · 隔离带开" : " · 隔离带关"}`,
+      icon: "book",
+    }),
+  ].join("");
+}
+
+/** 当前类别的表格体；类别由上面的 chip 决定，所以这里不再分块。 */
+function cooldownTableBody(section) {
+  if (!section) return `<tr><td colspan="5"><div class="empty">还没有可显示的目标</div></td></tr>`;
+  const rows = cooldownRows(section.materials || []);
+  if (rows) return rows;
+
   const keyword = (state.cooldownSearch || "").trim();
-  const onlyCooling = Boolean(state.cooldownOnlyCooling);
-  const blocks = [];
-  for (const section of sections) {
-    const all = section.materials || [];
-    const rows = cooldownRows(all);
-    if (!rows) continue;                                  // 这个类别里没有匹配的
-    const summary = section.summary || {};
-    const shown = (rows.match(/<tr>/g) || []).length;
-    const hidden = all.length - shown;
-    blocks.push(`<tr class="table-group"><td colspan="5">
-      <b>${escapeHtml(section.label)}</b>
-      <span class="muted">刷新 ${section.hours} 小时 · 冷却中 ${summary.cooling || 0}／共 ${summary.total || 0}${hidden > 0 ? ` · 筛选隐藏 ${hidden}` : ""}</span>
-      <div class="muted">${escapeHtml(section.note || "")}</div>
-    </td></tr>`);
-    blocks.push(rows);
+  const what = state.cooldownOnlyCooling
+    ? "这一类没有冷却中的目标（取消「只看冷却中」看看全部）"
+    : (keyword ? `这一类没有匹配「${escapeHtml(keyword)}」的目标` : "这一类还没有可显示的目标");
+  return `<tr><td colspan="5"><div class="empty">${what}</div></td></tr>`;
+}
+
+/** 页脚：这一类的依据 + "仓库里有路线、但你没建组"的材料（玩家实测问过这个）。 */
+function cooldownFoot(section, data) {
+  if (!section) return "";
+  const un = section.unsubscribed || [];
+  const parts = [];
+  parts.push(`数据来自 <b>BetterGI 自己的日志</b>（每条路线跑完都会记一笔），所以你在 BGI 里手动跑的也算。`);
+  parts.push(`自己<b>在游戏里采过</b>（日志里没有的）：点那行的「记为刚刷过」即可，等价于
+    <code>python -m skills.gather_cooldown --manual 霜仙花</code>；点「清除」把记录删掉。`);
+  if (un.length) {
+    const shown = un.slice(0, 40).map(escapeHtml).join("、");
+    parts.push(`📦 <b>${escapeHtml(section.label)}</b>这一类，BetterGI 的路线仓库里还有
+      <b>${un.length}</b> 种你的脚本组里没有的：${shown}${un.length > 40 ? "…" : ""}<br />
+      <span class="muted">没有脚本组就没有路线可开关，Agent 也跑不了它们 ——
+      在 BetterGI 里订阅 / 建组之后，它们才会出现在这张表里。</span>`);
+  } else {
+    parts.push(`📦 路线仓库里这一类能跑的材料，你都建过组了。`);
   }
-  if (!blocks.length) {
-    const what = onlyCooling
-      ? "没有冷却中的目标（取消「只看冷却中」看看全部）"
-      : (keyword ? `没有匹配「${escapeHtml(keyword)}」的目标` : "还没有可显示的目标");
-    return `<tr><td colspan="5"><div class="empty">${what}</div></td></tr>`;
-  }
-  return blocks.join("");
+  return parts.join("<br />");
 }
 
 function renderCooldown(data) {
@@ -654,37 +724,32 @@ function renderCooldown(data) {
     $("#cooldown-hint").textContent = (data && data.error) || "读取失败";
     $("#cooldown-table").innerHTML = "";
     $("#cooldown-cards").innerHTML = "";
+    $("#cooldown-tabs").innerHTML = "";
+    $("#cooldown-title").textContent = "资源冷却";
+    $("#cooldown-foot").innerHTML = "";
     return;
   }
   state.cooldown = data;
   const summary = data.summary || {};
   const sections = data.sections || [];
-  const icons = { specialty: "leaf", mine: "map", cook: "book", hunt: "spark" };
+  if (!sections.some((section) => section.key === state.cooldownCategory)) {
+    state.cooldownCategory = sections.length ? sections[0].key : "specialty";
+  }
+  const section = activeCooldownSection();
 
-  // 每个类别一张卡（"分好区"），最后一张放判定依据
-  const cards = sections.map((section) => {
-    const stats = section.summary || {};
-    return statCard({
-      label: section.label,
-      value: `${stats.cooling || 0} 冷却中`,
-      tone: stats.cooling ? "warn" : "ok",
-      sub: `共 ${stats.total || 0} 项 · 刷新 ${section.hours} 小时${stats.partial ? ` · 部分完成 ${stats.partial}` : ""}`,
-      icon: icons[section.key] || "leaf",
-    });
-  });
-  cards.push(statCard({
-    label: "判定依据",
-    value: data.band_enabled ? "按路线比例" : "正常冷却",
-    sub: `隔离带${data.band_enabled ? "开" : "关"} · 门槛 ${data.min_route_percent}% · 扫了 ${data.scanned_days} 天日志 · 共 ${summary.total || 0} 项`,
-    icon: "pulse",
-  }));
-  $("#cooldown-cards").innerHTML = cards.join("");
+  // 五个板块：每个类别一个 chip（点它切类别）+ 当前类别的四张统计卡 + 判定依据
+  $("#cooldown-tabs").innerHTML = cooldownTabs(sections);
+  $("#cooldown-cards").innerHTML = cooldownCards(section, data);
+  $("#cooldown-title").textContent = section
+    ? `${section.label} · 刷新 ${section.hours} 小时`
+    : "资源冷却";
 
   $("#cooldown-table").innerHTML = `<thead><tr>
       <th>目标</th><th>状态</th><th>上次</th><th>路线</th><th>操作</th>
-    </tr></thead><tbody>${cooldownTableBody(sections)}</tbody>`;
+    </tr></thead><tbody>${cooldownTableBody(section)}</tbody>`;
   $("#cooldown-hint").textContent =
-    `${data.generated_at} 读取 · 日志事件 ${data.events} 条 · 冷却中 ${summary.cooling || 0}／${summary.total || 0} · 点「刷新」可以随时重算`;
+    `${data.generated_at} 读取 · 日志事件 ${data.events} 条 · 四类合计 冷却中 ${summary.cooling || 0}／${summary.total || 0} · 点「刷新」可以随时重算`;
+  $("#cooldown-foot").innerHTML = cooldownFoot(section, data);
 }
 
 async function loadCooldown() {
@@ -703,6 +768,16 @@ async function cooldownManual(material, action) {
 function setupCooldownPage() {
   const search = $("#cooldown-search");
   const only = $("#cooldown-only-cooling");
+  const tabs = $("#cooldown-tabs");
+  if (tabs && tabs.addEventListener) {
+    // 点类别 chip 只换视图，不重新请求（数据一次就全拿到了）
+    tabs.addEventListener("click", (event) => {
+      const target = event.target && event.target.closest ? event.target.closest("[data-cool-tab]") : null;
+      if (!target) return;
+      state.cooldownCategory = target.dataset.coolTab;
+      if (state.cooldown) renderCooldown(state.cooldown);
+    });
+  }
   if (search && search.addEventListener) {
     search.addEventListener("input", () => {
       state.cooldownSearch = search.value || "";

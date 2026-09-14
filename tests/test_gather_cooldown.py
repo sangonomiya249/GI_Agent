@@ -670,6 +670,85 @@ class ExtraGroupTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("⚠️") for line in lines), lines)
 
 
+class UnsubscribedTests(unittest.TestCase):
+    """面板页脚那句"仓库里有路线、但你的脚本组里没有的材料"。
+
+    玩家实测问过："食材与炼金现在就一个久雨莲，而实际还有好多采集，是读不到还是？"
+    —— 不是读不到，是他的脚本组里只有久雨莲的路线；这里把差集算出来给他看。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = self.tmp.name
+        self.group_dir = os.path.join(self.root, "ScriptGroup")
+        self.pathing_dir = os.path.join(self.root, "AutoPathing")
+        os.makedirs(self.group_dir)
+
+        # 路线仓库：食材与炼金 4 个材料目录（一个是整包脚本，不算材料）
+        for name in ("久雨莲", "甜甜花", "薄荷", "提瓦特食材一条龙"):
+            os.makedirs(os.path.join(self.pathing_dir, "食材与炼金", name))
+        # 地方特产：材料在"地区"下一层
+        os.makedirs(os.path.join(self.pathing_dir, "地方特产", "璃月", "清心"))
+        os.makedirs(os.path.join(self.pathing_dir, "地方特产", "璃月", "琉璃袋"))
+        # 矿物 / 魔物：材料就是一级目录；带括号备注的会剥掉
+        os.makedirs(os.path.join(self.pathing_dir, "矿物", "铁块"))
+        os.makedirs(os.path.join(self.pathing_dir, "敌人与魔物", "蕈兽"))
+
+        # 脚本组里只有 久雨莲 与 清心
+        with open(os.path.join(self.group_dir, "食材与炼金.json"), "w", encoding="utf-8") as handle:
+            json.dump({"name": "食材与炼金", "projects": [
+                {"name": "01-久雨莲-厄里那斯-7个.json", "folderName": "食材与炼金\\久雨莲"},
+            ]}, handle, ensure_ascii=False)
+        with open(os.path.join(self.group_dir, "地图素材.json"), "w", encoding="utf-8") as handle:
+            json.dump({"name": "地图素材", "projects": [
+                {"name": "09A-清心-层岩巨渊-32朵.json", "folderName": "地方特产\\璃月\\清心"},
+            ]}, handle, ensure_ascii=False)
+
+        for name, value in (
+            ("BGI_SCRIPT_GROUP_DIR", self.group_dir),
+            ("BGI_AUTO_PATHING_DIR", self.pathing_dir),
+            ("BGI_MAP_CONFIG", os.path.join(self.group_dir, "地图素材.json")),
+            ("BGI_COOK_CONFIG", os.path.join(self.group_dir, "食材与炼金.json")),
+            ("BGI_MINE_CONFIG", ""),
+            ("BGI_ENEMY_CONFIG", ""),
+        ):
+            patcher = patch.object(config, name, value)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+        gather_cooldown._PATHING_CACHE.update({"key": None, "names": {}})
+        gather_cooldown._ROUTE_INDEX_KEY["key"] = None
+        gather_cooldown._ROUTE_TOTALS_CACHE_KEY["key"] = None
+
+    def test_pathing_walk_reads_materials_at_the_right_depth(self):
+        self.assertEqual(gather_cooldown.pathing_materials("cook"), ["久雨莲", "甜甜花", "薄荷"])
+        self.assertEqual(gather_cooldown.pathing_materials("specialty"), ["清心", "琉璃袋"])
+        self.assertEqual(gather_cooldown.pathing_materials("mine"), ["铁块"])
+        self.assertEqual(gather_cooldown.pathing_materials("hunt"), ["蕈兽"])
+
+    def test_whole_package_scripts_are_not_materials(self):
+        """「提瓦特食材一条龙」是整包脚本，不是材料。"""
+        self.assertNotIn("提瓦特食材一条龙", gather_cooldown.pathing_materials("cook"))
+
+    def test_unsubscribed_is_the_difference_to_the_groups(self):
+        self.assertEqual(gather_cooldown.unsubscribed_materials("cook"), ["甜甜花", "薄荷"])
+        self.assertEqual(gather_cooldown.unsubscribed_materials("specialty"), ["琉璃袋"])
+        self.assertEqual(gather_cooldown.unsubscribed_materials("mine"), ["铁块"])
+
+    def test_sections_carry_the_unsubscribed_list(self):
+        data = gather_cooldown.overview()
+
+        sections = {section["key"]: section for section in data["sections"]}
+        self.assertEqual(sections["cook"]["unsubscribed"], ["甜甜花", "薄荷"])
+        self.assertEqual(sections["specialty"]["unsubscribed"], ["琉璃袋"])
+
+    def test_missing_pathing_dir_is_tolerated(self):
+        with patch.object(config, "BGI_AUTO_PATHING_DIR", os.path.join(self.root, "没有这个目录")):
+            gather_cooldown._PATHING_CACHE.update({"key": None, "names": {}})
+            self.assertEqual(gather_cooldown.pathing_materials_all(), {})
+            self.assertEqual(gather_cooldown.unsubscribed_materials("cook"), [])
+
+
 class PromptBlockTests(unittest.TestCase):
     def test_block_lists_cooling_materials_and_the_rules(self):
         with patch.object(gather_cooldown, "cooling_materials", return_value=[{
