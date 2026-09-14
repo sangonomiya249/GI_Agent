@@ -349,42 +349,41 @@ def _route_totals_cache():
 
 
 def route_totals():
-    """{材料名: 这种材料**当前脚本组里**有几条路线}（按组文件 mtime 缓存）。
+    """{材料名: 这一类目里这种材料**一共有几条路线**}（全量目录，按组/归档 mtime 缓存）。
 
     为什么要它：**防闪退隔离带**会给"没被点名"的材料也打开一条路线（每连续 150 条 Disabled
     强制开一条）。玩家实测的坑：只跑了 1 条隔离带的路线，整种材料就被算成"采过了"、白等 48 小时
     （万相石 1/16、晶化骨髓 1/6、琉鳞石 1/6、星螺 1/5）。所以必须拿"跑了几条 / 一共几条"来判。
 
-    ⚠️ 这里刻意用**组文件本身**（`load_group`），不是归档里的全量清单：
-    真正跑的是 Agent 精简 / 开关之后的那几条（实测「食材与炼金」全量 2342 条，
-    跑竹笋时组里只有 3 条）。分母要是全量，"跑了 3 条竹笋"会算成 3/2342 → 永远判成"没跑完"。
-    组的来源：四个资源总组 + 玩家自建的魔物 / 材料小组（蕈兽.json、虹滴晶.json…），
-    这样"打蕈兽"这种目标也有可比的分母。
+    ⚠️ 数的是**全量归档**（`_group_scan()`），不是当前那份组文件：
+    组会被 Agent 精简成"上次要跑的那几条"，拿它当分母的话，别的材料全变成"组里没有路线"
+    （玩家实测截图里 星银矿石/白铁块/萃凝晶 就是这样），而且组一被改写，
+    上次跑过的材料就没有分母了。这四类目**没有"低效路线"过滤**（`skip_tokens` 只有锄大地有），
+    所以"匹配上的路线都会开"，全量计数就是该有的分母。
     """
     key = _group_scan_key(force=_ROUTE_TOTALS_CACHE_KEY.get("key") is None)
     if _ROUTE_TOTALS_CACHE_KEY.get("key") == key:
         return _ROUTE_TOTALS
 
-    try:
-        from skills import route_group
-    except Exception:        # noqa: BLE001
+    _key, entries = _group_scan()
+    if entries is None:          # 组读不了：保持上次结果
         return _ROUTE_TOTALS
 
     repo = pathing_materials_all()
-    every_repo_material = set()
-    for names in repo.values():
-        every_repo_material |= set(names)
-
-    totals = {}
-    seen_paths = [path for _category, path in _collect_group_paths() if path]
-    seen_paths += list(_extra_group_paths())
-    for path in seen_paths:
-        group = route_group.load_group(path) or {}
-        for project in group.get("projects") or []:
-            material = _material_from_project_validated(project, every_repo_material) \
-                or _material_from_project_checked(project)
-            if material and _looks_like_material(material):
-                totals[material] = totals.get(material, 0) + 1
+    totals, seen = {}, set()
+    for category, _path, project in entries:
+        material = _material_from_project_validated(project, repo.get(category) or set()) \
+            or _material_from_project_checked(project)
+        if not material or not _looks_like_material(material):
+            continue
+        # 同一条路线常常**同时**挂在"总组 / 归档"和玩家自建的小组里（虹滴晶、蕈兽、骗骗花…），
+        # 而且两边的 folderName 还不一样（`骗骗花\骗骗花@san` vs `敌人与魔物\骗骗花\骗骗花@san`）——
+        # 所以按"材料 + 路线文件名"去重，否则翻倍（实测骗骗花 86 条被数成 172 条）。
+        identity = (material, str(project.get("name") or ""))
+        if identity in seen:
+            continue
+        seen.add(identity)
+        totals[material] = totals.get(material, 0) + 1
 
     _ROUTE_TOTALS.clear()
     _ROUTE_TOTALS.update(totals)

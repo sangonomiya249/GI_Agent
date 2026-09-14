@@ -607,7 +607,7 @@ function cooldownRows(rows) {
   return filtered.map((row) => {
     const routes = row.total_routes
       ? `${row.ran_routes}/${row.total_routes} 条`
-      : `<span class="muted">组里没有路线</span>`;
+      : `<span class="muted">路线仓库里没有</span>`;
     const source = row.manual ? `<span class="tag dim">手动登记</span>` : "";
     const last = row.last_at
       ? `${escapeHtml(row.last_at)}${row.hours_ago !== null ? `<div class="muted">${escapeHtml(hoursText(row.hours_ago))}前</div>` : ""}`

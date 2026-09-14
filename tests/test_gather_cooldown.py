@@ -771,12 +771,17 @@ class FullCatalogueTests(unittest.TestCase):
             gather_cooldown.material_for_route("02-薄荷-璃月-12个.json"), "薄荷"
         )
 
-    def test_totals_use_the_current_group_as_the_denominator(self):
-        """分母只看**当前那份组**：跑竹笋时组里就 3 条，不能拿全量 2342 条当分母。"""
+    def test_totals_count_the_whole_catalogue(self):
+        """分母（"一共几条路线"）数的是**全量清单**，这样每种材料都有可比的分母。
+
+        用当前那份被精简过的组当分母的话，别的材料会全变成"组里没有路线"
+        （玩家实测截图：星银矿石 / 白铁块 / 萃凝晶 / 铁块 / 魔晶矿 全是这样）。
+        """
         totals = gather_cooldown.route_totals()
 
-        self.assertEqual(totals.get("久雨莲"), 1)     # 当前组里就 1 条
-        self.assertIsNone(totals.get("甜甜花"))       # 归档里有、当前组里没有 → 不设分母
+        self.assertEqual(totals.get("久雨莲"), 1)     # 当前组里 1 条、归档里也是这 1 条（按名字去重）
+        self.assertEqual(totals.get("甜甜花"), 1)     # 只在归档里，也要有分母
+        self.assertEqual(totals.get("薄荷"), 1)
         self.assertEqual(totals.get("清心"), 1)
         self.assertEqual(totals.get("琉璃袋"), 1)
 
