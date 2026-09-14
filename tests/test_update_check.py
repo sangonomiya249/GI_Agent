@@ -30,6 +30,45 @@ def release(tag="v1.5.0", name="", body="", url="", published="2026-09-15T10:00:
     }
 
 
+# ---- 假 requests：类名要和真正的异常一致（_short_reason 按类名判断） ----
+SSLErrorLike = type("SSLError", (Exception,), {})
+ConnectionErrorLike = type("ConnectionError", (Exception,), {})
+TimeoutLike = type("ReadTimeout", (Exception,), {})
+
+
+class FakeResponse:
+    def __init__(self, payload, status=200):
+        self.status_code = status
+        self._payload = payload
+
+    def json(self):
+        return self._payload
+
+
+class FakeSession:
+    """按预设顺序吐出结果：异常就抛，响应就返回；顺手记录每次用了什么代理/证书。"""
+
+    def __init__(self, outcomes):
+        self.outcomes = list(outcomes)
+        self.calls = []
+        self.headers = {}
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def get(self, url, **kwargs):
+        self.calls.append((url, kwargs.get("verify"), kwargs.get("proxies")))
+        if not self.outcomes:
+            raise AssertionError("假 session 用完了，说明代码比预期多试了一次")
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, BaseException):
+            raise outcome
+        return outcome
+
+
 class VersionParsingTests(unittest.TestCase):
     def test_common_shapes(self):
         cases = (
@@ -139,12 +178,24 @@ class CheckTests(unittest.TestCase):
 
     def test_repo_without_any_release_is_not_a_crash(self):
         result = update_check.check(
-            now=self.now, fetch=lambda slug: (None, "这个仓库还没有发布过 release")
+            now=self.now,
+            fetch=lambda slug: (None, "这个仓库还没有发布过 release（发布时打的 tag 形如 v1.0.0）"),
+        )
+
+        # 这不是"检查失败"：仓库确实没发过 release，用 none 状态说实话
+        self.assertEqual(result["status"], "none")
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["error"], "")
+        self.assertIn("还没有发布过 release", result["headline"])
+        self.assertIn("tag", result["detail"])
+
+    def test_network_failure_is_an_error(self):
+        result = update_check.check(
+            now=self.now, fetch=lambda slug: (None, "连不上 GitHub。直连：连不上（ConnectionError）")
         )
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["status"], "error")
-        self.assertIn("还没有发布过 release", result["error"])
         self.assertIn("检查更新失败", result["headline"])
 
     def test_offline_is_reported_but_harmless(self):
@@ -275,6 +326,121 @@ class FormatTests(unittest.TestCase):
 
         self.assertEqual(code, 1)
         self.assertIn("断网了", buffer.getvalue())
+
+
+class EmojiTests(unittest.TestCase):
+    """文案里不放 emoji：界面用自己的 SVG 图标，终端直接看字。"""
+
+    EMOJI = ("🎉", "✅", "📡", "📴", "🧪", "❔", "📦", "⏳")
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        for item in (
+            patch.object(config, "PROJECT_ROOT", self.tmp.name),
+            patch.object(config, "UPDATE_CHECK", True),
+            patch.object(config, "UPDATE_REPO", "sangonomiya249/GI_Agent"),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
+        with open(os.path.join(self.tmp.name, "VERSION"), "w", encoding="utf-8") as handle:
+            handle.write("1.0.0\n")
+
+    def _text(self, result):
+        return "\n".join([str(result.get("headline") or ""), str(result.get("detail") or ""),
+                          *update_check.format_lines(result)])
+
+    def test_no_emoji_in_any_status(self):
+        cases = (
+            update_check.check(now=datetime.datetime(2026, 9, 15, 20, 0, 0),
+                               fetch=lambda slug: (release(tag="v1.5.0"), "")),
+            update_check.check(now=datetime.datetime(2026, 9, 15, 20, 0, 0),
+                               fetch=lambda slug: (release(tag="1.0.0"), "")),
+            update_check.check(now=datetime.datetime(2026, 9, 15, 20, 0, 0),
+                               fetch=lambda slug: (None, "连不上 GitHub。")),
+        )
+        with patch.object(config, "UPDATE_CHECK", False):
+            cases = cases + (update_check.check(now=datetime.datetime(2026, 9, 15, 20, 0, 0)),)
+
+        for result in cases:
+            with self.subTest(status=result["status"]):
+                text = self._text(result)
+                for emoji in self.EMOJI:
+                    self.assertNotIn(emoji, text)
+
+
+class ConnectionFallbackTests(unittest.TestCase):
+    """连不上 GitHub 时的兜底：换代理、换 CA 证书，并把"走了哪条路"记下来。
+
+    玩家实测：本机戴着代理（HTTPS 被中间解密），Python 自带证书库不认那个 CA，
+    直接报 `SSLError`；本机的 git 也踩过同一个坑（靠 `.git/win-ca-bundle.pem` 才连上）。
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.bundle = os.path.join(self.tmp.name, "ca.pem")
+        with open(self.bundle, "w", encoding="utf-8") as handle:
+            handle.write("-----BEGIN CERTIFICATE-----\nMIIB\n-----END CERTIFICATE-----\n")
+        for item in (
+            patch.object(config, "PROJECT_ROOT", self.tmp.name),
+            patch.object(config, "UPDATE_CA_BUNDLE", self.bundle),
+            patch.object(config, "UPDATE_CHECK_TIMEOUT", 1),
+        ):
+            item.start()
+            self.addCleanup(item.stop)
+
+    def test_ssl_error_retries_with_the_extra_ca_bundle(self):
+        session = FakeSession([
+            SSLErrorLike("HTTPSConnectionPool: certificate verify failed: self signed certificate"),
+            FakeResponse({"tag_name": "v1.5.0", "name": "x", "html_url": "u", "body": ""}),
+        ])
+        with patch.object(update_check, "_session", return_value=session), patch.object(
+            update_check, "connection_plans", return_value=[(None, "系统 / 环境变量代理")]
+        ):
+            release, error = update_check.fetch_latest("sangonomiya249/GI_Agent")
+
+        self.assertEqual(error, "")
+        self.assertEqual(release["tag"], "v1.5.0")
+        self.assertIn("证书", release["via"])
+        self.assertEqual(session.calls[0][1], True)                  # 第一次用系统证书
+        self.assertEqual(session.calls[1][1], self.bundle)           # 第二次换成额外 CA
+
+    def test_every_route_failing_gives_a_readable_reason(self):
+        session = FakeSession([SSLErrorLike("certificate verify failed"), SSLErrorLike("still bad")])
+        with patch.object(update_check, "_session", return_value=session), patch.object(
+            update_check, "connection_plans", return_value=[(None, "系统 / 环境变量代理")]
+        ):
+            release, error = update_check.fetch_latest("sangonomiya249/GI_Agent")
+
+        self.assertIsNone(release)
+        self.assertIn("连不上 GitHub", error)
+        self.assertIn("证书校验失败", error)
+        self.assertIn("UPDATE_CA_BUNDLE", error)                     # 证书问题要给出正确的下一步
+
+    def test_connection_error_points_at_the_proxy_setting(self):
+        session = FakeSession([ConnectionErrorLike("Connection refused")] * 2)
+        with patch.object(update_check, "_session", return_value=session), patch.object(
+            update_check, "connection_plans", return_value=[(None, "系统 / 环境变量代理")]
+        ):
+            release, error = update_check.fetch_latest("sangonomiya249/GI_Agent")
+
+        self.assertIsNone(release)
+        self.assertIn("UPDATE_PROXY", error)
+
+    def test_plans_cover_proxy_direct_and_a_local_proxy(self):
+        with patch.object(config, "UPDATE_PROXY", "http://127.0.0.1:1080"):
+            labels = [label for _proxies, label in update_check.connection_plans()]
+
+        self.assertTrue(any("系统" in label for label in labels))
+        self.assertIn("直连", labels)
+        self.assertTrue(any("1080" in label for label in labels))
+
+    def test_short_reason_names_the_failure_kind(self):
+        self.assertIn("证书校验失败", update_check._short_reason(
+            SSLErrorLike("certificate verify failed: unable to get local issuer certificate")))
+        self.assertIn("连不上", update_check._short_reason(ConnectionErrorLike("boom")))
+        self.assertIn("超时", update_check._short_reason(TimeoutLike("read timed out")))
 
 
 if __name__ == "__main__":

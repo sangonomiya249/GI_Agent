@@ -860,14 +860,21 @@ kbd {
   .run-sidebar { display: flex; }
 }
 
-/* ---------------- 版本与更新卡 ---------------- */
-#dash-update .row-actions { align-items: center; gap: 8px; flex-wrap: wrap; }
+/* ---------------- 版本更新页（系统） ---------------- */
+#update-body { display: flex; flex-direction: column; gap: 4px; }
+.update-line {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 14px; font-weight: 600; color: var(--text);
+}
+.update-line .status-icon { display: inline-flex; color: var(--accent); }
+.update-line .status-icon svg { width: 16px; height: 16px; }
+.update-error { word-break: break-word; }
 .link { color: var(--accent); text-decoration: none; word-break: break-all; }
 .link:hover { text-decoration: underline; }
 .update-notes {
-  margin: 8px 0 0; padding: 9px 11px; max-height: 190px; overflow: auto;
+  margin: 8px 0 0; padding: 10px 12px; max-height: 320px; overflow: auto;
   background: var(--panel-2); border: 1px solid var(--border); border-radius: var(--radius-sm);
-  font-family: inherit; font-size: 12px; line-height: 1.6; color: var(--text-dim);
+  font-family: inherit; font-size: 12.5px; line-height: 1.65; color: var(--text-dim);
   white-space: pre-wrap; word-break: break-word;
 }
 

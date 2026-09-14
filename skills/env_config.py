@@ -167,10 +167,22 @@ FIELD_GROUPS = (
                   "离线时只是那一行提示失败，不影响 Agent。设 0 = 完全不碰网络。"),
             Field("UPDATE_REPO", "检查哪个仓库", "text", (), "sangonomiya249/GI_Agent",
                   "写成 owner/repo。fork 出去以后改这里，就能检查自己的仓库。"),
+            Field("UPDATE_PROXY", "访问 GitHub 的代理", "text", (), "",
+                  "留空 = 先按系统/环境变量里的代理试，再试直连，最后还会试一次本机常见端口\n"
+                  "127.0.0.1:7890（Clash / Mihomo）。这台机器开着代理但检查更新总是失败时，\n"
+                  "把代理地址填在这里（例如 http://127.0.0.1:7890）。"),
+            Field("UPDATE_CA_BUNDLE", "额外的 HTTPS 证书（pem）", "path", (), "",
+                  "报 `SSLError: certificate verify failed` 时填这里 —— 说明本机有代理/杀软在\n"
+                  "中间解密 HTTPS，Python 自带证书库不认那个 CA。填 Windows 根证书导出的 pem 即可\n"
+                  "（本仓库的 git 也是靠 .git\\win-ca-bundle.pem 才连上 GitHub 的）。\n"
+                  "留空时程序会自己依次试用：requests 自带证书 → 环境变量 REQUESTS_CA_BUNDLE\n"
+                  "/ SSL_CERT_FILE → 仓库里的 .git\\win-ca-bundle.pem。"),
             Field("UPDATE_CHECK_HOURS", "结果缓存（小时）", "int", (), "6",
                   "GitHub 匿名接口每小时只有 60 次，所以检查结果会缓存这么久（点「检查更新」会忽略缓存）。"),
             Field("UPDATE_CHECK_TIMEOUT", "请求超时（秒）", "int", (), "6",
                   "卡网时不要让 Studio 页面跟着卡住。"),
+            Field("UPDATE_CHECK_ERROR_MINUTES", "失败结果缓存（分钟）", "int", (), "10",
+                  "检查失败也记一小会儿：否则离线时每次打开「版本更新」页都要白等一串重试。"),
         ),
     ),
     FieldGroup(

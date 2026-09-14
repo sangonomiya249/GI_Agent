@@ -127,7 +127,7 @@ def compare_versions(latest, local):
 
 
 # ==========================================
-# 🌟 问 GitHub
+# 🌟 问 GitHub（代理 / 证书会挨个试）
 # ==========================================
 
 def _trim_notes(body):
@@ -137,12 +137,85 @@ def _trim_notes(body):
     return "\n".join(line[:_NOTES_MAX_CHARS] for line in kept)
 
 
-def _explain_404(slug, session, timeout):
+def ca_bundle_candidates():
+    """可用的"额外 CA 证书"清单（按优先级）：配置 → 环境变量 → 仓库里的 Windows 根证书导出。
+
+    为什么需要它：本机装了 Clash / 公司代理 / 杀软时，HTTPS 会被**中间解密**，
+    此时 Python 自带的证书库（certifi）不认那个自签 CA，于是报
+    `SSLError: certificate verify failed` —— 本机的 git 也踩过同一个坑
+    （靠 `.git/win-ca-bundle.pem` 才连上 GitHub），这里的候选就是为它准备的。
+    """
+    candidates = []
+    configured = str(getattr(config, "UPDATE_CA_BUNDLE", "") or "").strip()
+    if configured:
+        candidates.append(configured)
+    for name in ("REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "SSL_CERT_FILE"):
+        value = str(os.getenv(name) or "").strip()
+        if value:
+            candidates.append(value)
+    candidates.append(os.path.join(config.PROJECT_ROOT, ".git", "win-ca-bundle.pem"))
+
+    seen, ready = set(), []
+    for path in candidates:
+        if not path or path in seen or not os.path.isfile(path):
+            continue
+        seen.add(path)
+        ready.append(path)
+    return ready
+
+
+def connection_plans():
+    """要依次尝试的连接方式：系统代理 → 直连 → 配置的代理 → 常见本地代理。
+
+    `proxies=None` 会继续吃环境变量 / 系统代理（普通情况就该这样），
+    `proxies={}` 才是真的直连 —— 这两条都试，才不会"代理死了就彻底连不上"。
+    """
+    plans = [(None, "系统 / 环境变量代理")]
+    configured = str(getattr(config, "UPDATE_PROXY", "") or "").strip()
+    if configured:
+        plans.append(({"http": configured, "https": configured}, f"代理 {configured}"))
+    plans.append(({}, "直连"))
+    local = "http://127.0.0.1:7890"          # Clash / Mihomo 的常见端口，连不上时拒绝得很快
+    if not configured:
+        plans.append(({"http": local, "https": local}, f"本地代理 {local}"))
+    return plans
+
+
+def _session():
+    import requests
+
+    session = requests.Session()
+    session.headers.update({"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"})
+    return session
+
+
+def _short_reason(exc):
+    """把请求异常压缩成一句能看懂的话（证书问题单独说，别混进"网络失败"）。"""
+    name = type(exc).__name__
+    text = str(exc)
+    if name == "SSLError" or "certificate" in text.lower() or "SSL" in name:
+        inner = ""
+        for line in text.splitlines():
+            line = line.strip()
+            if "certificate verify failed" in line or "self signed" in line or "unable to get" in line:
+                inner = line
+                break
+        return f"证书校验失败（{inner or 'SSLError'}）"
+    if name == "ProxyError":
+        return f"代理连不上（ProxyError）"
+    if name in ("ConnectionError", "ConnectTimeout", "NewConnectionError"):
+        return f"连不上（{name}）"
+    if name in ("ReadTimeout", "Timeout"):
+        return f"超时（{name}）"
+    return f"{name}: {text.splitlines()[0][:120]}" if text else name
+
+
+def _explain_404(session, slug, timeout, verify):
     """404 到底是"仓库没发布过 release"还是"仓库不存在/私有" —— 再问一次仓库接口。"""
     try:
-        probe = session.get(f"{API_ROOT}/repos/{slug}", timeout=timeout)
+        probe = session.get(f"{API_ROOT}/repos/{slug}", timeout=timeout, verify=verify)
     except Exception as exc:            # noqa: BLE001
-        return f"拿不到 release 信息（{type(exc).__name__}）"
+        return f"拿不到 release 信息（{_short_reason(exc)}）"
     if probe.status_code == 200:
         return "这个仓库还没有发布过 release（发布时打的 tag 形如 v1.0.0）"
     if probe.status_code == 404:
@@ -154,6 +227,10 @@ def fetch_latest(repo=None, timeout=None):
     """问 GitHub 要最新 release → (release 字典 或 None, 错误说明)。
 
     ⚠️ 只用 GitHub 公开 API（匿名每小时 60 次），所以调用方必须缓存 —— 见 `check()`。
+
+    连接方式会依次试：系统代理 → 配置的代理 → 直连 → 本地代理；
+    每组再用"系统证书"与"额外 CA 证书"各试一次（证书失败通常是代理在中间解密）。
+    成功的组合记在返回值的 `via` 里，失败时把每次的原因串起来给人看。
     """
     slug = str(repo or repo_slug()).strip()
     if not slug or "/" not in slug:
@@ -164,36 +241,60 @@ def fetch_latest(repo=None, timeout=None):
     except Exception as exc:            # noqa: BLE001 —— 依赖缺失不该让更新检查变成崩溃
         return None, f"没有 requests 库：{exc}"
 
-    timeout = int(timeout or getattr(config, "UPDATE_CHECK_TIMEOUT", 6) or 6)
-    headers = {"User-Agent": USER_AGENT, "Accept": "application/vnd.github+json"}
-    session = requests.Session()
-    session.headers.update(headers)
-    try:
-        response = session.get(f"{API_ROOT}/repos/{slug}/releases/latest", timeout=timeout)
-    except Exception as exc:            # noqa: BLE001 —— 离线/被墙/代理问题都走这里
-        return None, f"连不上 GitHub（{type(exc).__name__}）—— 离线或代理没配好时正常"
+    base_timeout = int(timeout or getattr(config, "UPDATE_CHECK_TIMEOUT", 6) or 6)
+    url = f"{API_ROOT}/repos/{slug}/releases/latest"
+    bundles = ca_bundle_candidates()
+    tries, last_error, saw_ssl = [], "", False
 
-    if response.status_code == 404:
-        return None, _explain_404(slug, session, timeout)
-    if response.status_code == 403:
-        return None, "GitHub 限流了（匿名每小时 60 次）—— 过一会儿再试"
-    if response.status_code != 200:
-        return None, f"GitHub 返回 {response.status_code}"
-    try:
-        payload = response.json()
-    except ValueError:
-        return None, "GitHub 返回的不是 JSON"
-    if not isinstance(payload, dict):
-        return None, "GitHub 返回的结构不对"
+    for index, (proxies, proxy_label) in enumerate(connection_plans()):
+        # 第一次用配置的超时，后面的兜底快试快回（免得页面白等一串重试）
+        attempt_timeout = base_timeout if index == 0 else max(3, base_timeout // 2)
+        for bundle in [None, *bundles]:
+            verify = bundle or True
+            ca_label = "系统证书" if bundle is None else f"证书 {os.path.basename(bundle)}"
+            try:
+                with _session() as session:
+                    response = session.get(url, proxies=proxies, verify=verify,
+                                           timeout=attempt_timeout)
+            except Exception as exc:            # noqa: BLE001 —— 离线/被墙/代理/证书都走这里
+                reason = _short_reason(exc)
+                saw_ssl = saw_ssl or ("证书" in reason)
+                last_error = f"{proxy_label} + {ca_label}：{reason}"
+                tries.append(last_error)
+                continue
 
-    return {
-        "tag": str(payload.get("tag_name") or ""),
-        "name": str(payload.get("name") or ""),
-        "url": str(payload.get("html_url") or ""),
-        "notes": _trim_notes(payload.get("body")),
-        "published_at": str(payload.get("published_at") or ""),
-        "prerelease": bool(payload.get("prerelease")),
-    }, ""
+            via = f"{proxy_label} + {ca_label}"
+            if response.status_code == 404:
+                return None, _explain_404(session, slug, attempt_timeout, verify)
+            if response.status_code == 403:
+                return None, "GitHub 限流了（匿名每小时 60 次）—— 过一会儿再试"
+            if response.status_code != 200:
+                return None, f"GitHub 返回 {response.status_code}（{via}）"
+            try:
+                payload = response.json()
+            except ValueError:
+                return None, "GitHub 返回的不是 JSON"
+            if not isinstance(payload, dict):
+                return None, "GitHub 返回的结构不对"
+
+            release = {
+                "tag": str(payload.get("tag_name") or ""),
+                "name": str(payload.get("name") or ""),
+                "url": str(payload.get("html_url") or ""),
+                "notes": _trim_notes(payload.get("body")),
+                "published_at": str(payload.get("published_at") or ""),
+                "prerelease": bool(payload.get("prerelease")),
+                "via": via,
+            }
+            return release, ""
+
+    hint = "如果开了代理（Clash / v2ray 之类），把地址填进 UPDATE_PROXY"
+    if saw_ssl:
+        hint = ("证书校验失败通常是代理/杀软在中间解密 HTTPS："
+                "把 Windows 根证书导出成 pem 后填进 UPDATE_CA_BUNDLE"
+                f"（本机 git 用的就是 {os.path.join('.git', 'win-ca-bundle.pem')} 这种文件）")
+    summary = "；".join(tries[-3:]) if tries else "没有可用的连接方式"
+    return None, f"连不上 GitHub。{summary} ↳ {hint}"
 
 
 # ==========================================
@@ -265,6 +366,7 @@ def _result(**kwargs):
         "checked_at": "",
         "from_cache": False,
         "cache_age_hours": None,
+        "via": "",
         "repo": repo_slug(),
         "update_hint": update_hint(),
     }
@@ -273,9 +375,12 @@ def _result(**kwargs):
 
 
 def check(force=False, repo=None, now=None, fetch=None):
-    """检查有没有新版本（默认吃 6 小时缓存）。**永不抛异常**。
+    """检查有没有新版本（默认吃缓存）。**永不抛异常**。
 
     `fetch` 只是为了测试：签名 `fetch(repo) -> (release 或 None, 错误说明)`。
+
+    文案里**不带 emoji**：界面用自己的 SVG 图标，终端直接看文字
+    （emoji 在不同系统/字体下样子差别很大，长在正文里反而添乱）。
     """
     now = now or datetime.datetime.now()
     slug = str(repo or repo_slug()).strip()
@@ -283,15 +388,22 @@ def check(force=False, repo=None, now=None, fetch=None):
 
     if not getattr(config, "UPDATE_CHECK", True):
         return _result(
-            status="disabled", headline="📴 更新检查已关闭（UPDATE_CHECK=0）",
+            status="disabled", headline="更新检查已关闭（UPDATE_CHECK=0）",
             local_version=local, local_source=local_source, repo=slug,
             checked_at=now.strftime("%Y-%m-%d %H:%M:%S"),
         )
 
     ttl = int(getattr(config, "UPDATE_CHECK_HOURS", 6) or 6)
+    error_minutes = int(getattr(config, "UPDATE_CHECK_ERROR_MINUTES", 10) or 10)
     cached = load_cache()
     age = _cache_age_hours(cached, now)
-    if not force and cached and cached.get("repo") == slug and age is not None and age < ttl:
+    cache_ok = (
+        cached
+        and cached.get("repo") == slug
+        and age is not None
+        and age < (error_minutes / 60 if cached.get("status") == "error" else ttl)
+    )
+    if not force and cache_ok:
         return _result(
             status=str(cached.get("status") or "unknown"),
             update_available=bool(cached.get("update_available")),
@@ -305,6 +417,9 @@ def check(force=False, repo=None, now=None, fetch=None):
             prerelease=bool(cached.get("prerelease")),
             headline=str(cached.get("headline") or ""),
             detail=str(cached.get("detail") or ""),
+            error=str(cached.get("error") or ""),
+            via=str(cached.get("via") or ""),
+            ok=str(cached.get("status") or "") != "error",
             checked_at=str(cached.get("checked_at") or ""),
             from_cache=True,
             cache_age_hours=round(age, 2),
@@ -317,22 +432,54 @@ def check(force=False, repo=None, now=None, fetch=None):
     except Exception as exc:            # noqa: BLE001 —— 检查更新永远不该把上层带崩
         release, error = None, f"检查时出错了（{type(exc).__name__}: {exc}）"
     if not release:
+        # 404 不是"检查失败"：仓库确实还没有发布过 release（新仓库/fork 常见的状态），
+        # 单独给一个 none 状态，页面就不会用"检查失败"的口吻吓人。
+        if "还没有发布过 release" in str(error):
+            headline = f"仓库还没有发布过 release（本地 {local or '未知'}）"
+            save_cache({
+                "checked_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "repo": slug,
+                "status": "none",
+                "update_available": False,
+                "local_version": local,
+                "headline": headline,
+                "detail": error,
+                "error": "",
+            })
+            return _result(
+                status="none", local_version=local, local_source=local_source,
+                detail=error, headline=headline,
+                checked_at=now.strftime("%Y-%m-%d %H:%M:%S"), repo=slug,
+            )
+
+        headline = f"检查更新失败：{error}"
+        # 失败也缓存一小会儿（默认 10 分钟）：离线时别让每次打开页面都白等一串重试
+        save_cache({
+            "checked_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "repo": slug,
+            "status": "error",
+            "update_available": False,
+            "local_version": local,
+            "headline": headline,
+            "detail": "",
+            "error": error,
+        })
         return _result(
             ok=False, status="error", local_version=local, local_source=local_source,
-            error=error, headline=f"📡 检查更新失败：{error}",
+            error=error, headline=headline,
             checked_at=now.strftime("%Y-%m-%d %H:%M:%S"), repo=slug,
         )
 
     latest = release.get("tag") or ""
     status, detail = compare_versions(latest, local)
     if status == "newer":
-        headline = f"🎉 有新版本 {latest}（本地 {local or '未知'}）"
+        headline = f"有新版本 {latest}（本地 {local or '未知'}）"
     elif status == "same":
-        headline = f"✅ 已是最新（{local or latest}）"
+        headline = f"已是最新（{local or latest}）"
     elif status == "older":
-        headline = f"🧪 本地比 release 还新（本地 {local} > {latest}）"
+        headline = f"本地比 release 还新（本地 {local} > {latest}）"
     else:
-        headline = f"❔ 版本号认不出来（本地 {local or '未知'} / 最新 {latest or '未知'}）"
+        headline = f"版本号认不出来（本地 {local or '未知'} / 最新 {latest or '未知'}）"
 
     payload = {
         "checked_at": now.strftime("%Y-%m-%d %H:%M:%S"),
@@ -346,6 +493,7 @@ def check(force=False, repo=None, now=None, fetch=None):
         "published_at": release.get("published_at") or "",
         "notes": release.get("notes") or "",
         "prerelease": bool(release.get("prerelease")),
+        "via": release.get("via") or "",
         "headline": headline,
         "detail": detail,
     }
@@ -364,6 +512,7 @@ def check(force=False, repo=None, now=None, fetch=None):
         prerelease=bool(release.get("prerelease")),
         headline=headline,
         detail=detail,
+        via=str(release.get("via") or ""),
         checked_at=payload["checked_at"],
         repo=slug,
     )
@@ -388,12 +537,14 @@ def format_lines(result):
     if result.get("notes"):
         lines.append("   更新说明：")
         lines.extend(f"     {line}" for line in str(result["notes"]).splitlines())
+    if result.get("via"):
+        lines.append(f"   连接方式：{result['via']}")
     if result.get("from_cache"):
         age = result.get("cache_age_hours")
         lines.append(f"   （来自缓存，{age:.1f} 小时前查的；加 --force 立刻重查）" if isinstance(age, float)
                      else "   （来自缓存；加 --force 立刻重查）")
     if result.get("status") == "error":
-        lines.append("   ↳ 只有这一行受影响：Agent / Studio / 跑图都不需要网络，照常用。")
+        lines.append("   ↳ 只有这一项受影响：Agent / Studio / 跑图都不需要网络，照常用。")
     return lines
 
 
@@ -409,9 +560,10 @@ def main(argv=None):
     if args.json:
         print(json.dumps(result, ensure_ascii=False, indent=2))
     else:
-        print("📦 GI_Agent 版本检查")
+        print("GI_Agent 版本检查")
         print(f"   本地版本：{result.get('local_version') or '未知'}"
               f"（{result.get('local_source') or '未知来源'}）")
+        print(f"   检查仓库：{result.get('repo') or repo_slug()}")
         for line in format_lines(result):
             print(line if line.startswith("   ") else f"   {line}")
     return 0 if result.get("status") != "error" else 1

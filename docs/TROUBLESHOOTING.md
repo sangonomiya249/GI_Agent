@@ -34,14 +34,23 @@ venv\Scripts\python.exe -m pip install -r requirements.txt
 ## 版本与更新
 
 **「检查更新」说失败 / 说"这个仓库还没有发布过 release"**
-只有那一行提示受影响：Agent、Studio、跑图都不需要网络，照常用。几种常见原因：
-* **离线 / 被墙 / 代理没配好** → 文案是 `连不上 GitHub（ConnectionError）`。
-  不想让它碰网络就设 `UPDATE_CHECK=0`（Studio 配置页有这一项）。
+只有那一页受影响：Agent、Studio、跑图都不需要网络，照常用。页面会把**每次尝试的原因**都列出来
+（走的哪个代理、用的哪个证书），按下面几种情况处理：
+* **`SSLError` / `certificate verify failed`（证书校验失败）** —— 本机有代理或杀软在**中间解密 HTTPS**，
+  Python 自带的证书库不认那个自签 CA。程序已经会自动再试一遍"额外 CA 证书"
+  （依次是环境变量 `REQUESTS_CA_BUNDLE` / `SSL_CERT_FILE`、以及仓库里的 `.git\win-ca-bundle.pem`
+  —— 本项目的 git 就是靠它连上 GitHub 的）。还是不行就把 Windows 根证书导出成 pem，
+  路径填进 `.env` 的 `UPDATE_CA_BUNDLE`（Studio 配置页「版本与更新」一组里也有这个输入框）。
+* **`连不上（ConnectionError）` / 超时** —— 目标端口不通。程序会依次试
+  「系统/环境变量代理 → 直连 → 本机 `127.0.0.1:7890`」；都没通就把代理地址填进 `UPDATE_PROXY`
+  （例如 `http://127.0.0.1:7890`）。
+* **完全不想让它碰网络** → `UPDATE_CHECK=0`（Studio 配置页有开关）。
 * **`这个仓库还没有发布过 release`** → GitHub 的 Releases 页面确实是空的，不是你的网络问题。
   维护者发版的顺序：把仓库根的 `VERSION` 改成新版本号 → 在 GitHub 上发布 release，
   tag 用同名的 `v1.0.1`（**别勾 pre-release**，`releases/latest` 看不到预发布）。
 * **限流** → GitHub 匿名接口每小时只有 60 次；程序默认把结果缓存 6 小时（`UPDATE_CHECK_HOURS`），
-  只有点「检查更新」或 `python main.py update --force` 才真的重查。
+  只有点「检查更新」或 `python main.py update --force` 才真的重查；失败也会缓存
+  `UPDATE_CHECK_ERROR_MINUTES`（默认 10 分钟），免得离线时反复白等。
 * 检查哪个仓库由 `.env` 的 `UPDATE_REPO` 决定（默认 `sangonomiya249/GI_Agent`，fork 了改成自己的）。
 
 **真提示有新版本了，怎么更新？**

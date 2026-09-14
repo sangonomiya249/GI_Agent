@@ -744,6 +744,19 @@ def create_app(runner=None, env_path=None, channels=None):
             "one_dragon": os.path.join(config.BGI_DIR, "User", "OneDragon"),
             "script_group": config.BGI_SCRIPT_GROUP_DIR,
         }
+        # 也允许打开 GitHub 链接（「版本更新」页的「打开发布页」）。
+        # 只放行 github.com：这接口会直接交给系统默认程序，不能让人塞任意 URL / 本地文件进来。
+        url = str(payload.get("url") or "").strip()
+        if url:
+            if not url.startswith(("https://github.com/", "http://github.com/",
+                                   "https://www.github.com/")):
+                return _json_error("只允许打开 GitHub 链接")
+            try:
+                os.startfile(url)  # noqa: S606
+            except Exception as exc:
+                return jsonify({"ok": False, "error": str(exc)})
+            return jsonify({"ok": True, "url": url})
+
         target = str(payload.get("target") or "")
         path = targets.get(target)
         if not path or not os.path.exists(path):

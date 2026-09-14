@@ -31,6 +31,7 @@
       <button class="nav-item" data-page="guide"><span class="ico" data-icon="book"></span>使用说明</button>
       <button class="nav-item" data-page="doctor"><span class="ico" data-icon="pulse"></span>环境体检</button>
       <button class="nav-item" data-page="logs"><span class="ico" data-icon="terminal"></span>BetterGI 日志</button>
+      <button class="nav-item" data-page="update"><span class="ico" data-icon="refresh"></span>版本更新 <em class="badge hidden" id="nav-badge-update">1</em></button>
       <button class="nav-item" data-page="about"><span class="ico" data-icon="info"></span>关于</button>
     </nav>
 
@@ -80,16 +81,6 @@
             <div class="bgi-highlight" id="dash-highlight"></div>
             <div class="log-mini" id="dash-bgi-log"></div>
           </div>
-        </div>
-
-        <div class="card">
-          <div class="card-head">
-            <h2>版本与更新</h2>
-            <div class="row-actions tight">
-              <button class="btn ghost sm" id="btn-update-check">检查更新</button>
-            </div>
-          </div>
-          <div id="dash-update"><div class="empty">读取中…（只读 GitHub 的 release 信息，不下载、不改文件）</div></div>
         </div>
 
         <div class="card">
@@ -252,6 +243,39 @@
             验证直接用输入框里的当前内容，<b>不需要先保存</b>。<br />
             ⚠️ Cookie 是账号级凭据：只写进本机 <code>.env</code>，接口只回掩码；拿法与排错见 <code>docs/MYS_COOKIE.md</code>。
           </div>
+        </div>
+      </div>
+
+      <!-- ---------- 版本更新（系统） ---------- -->
+      <div class="page hidden" data-page="update">
+        <div class="cards" id="update-cards"></div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>版本与更新</h2>
+            <div class="row-actions tight">
+              <span class="muted" id="update-hint">读取中…</span>
+              <button class="btn ghost sm" id="btn-update-open" disabled>打开发布页</button>
+              <button class="btn primary sm" id="btn-update-check">检查更新</button>
+            </div>
+          </div>
+          <div id="update-body"><div class="empty">正在读取…</div></div>
+          <div class="hint">
+            只读 GitHub 的 <b>release</b> 信息：<b>不下载、不改任何文件</b>；
+            要不要更新、怎么更新由你决定（git 用户 <code>git pull</code>，zip 用户去发布页下载覆盖，
+            <code>.env</code> 与 <code>memory\</code> 别覆盖）。<br />
+            本地版本取仓库根的 <code>VERSION</code> 文件；检查哪个仓库看 <code>UPDATE_REPO</code>；
+            结果会缓存 <code>UPDATE_CHECK_HOURS</code> 小时（点「检查更新」忽略缓存重查）。
+            完全不想让它碰网络：<code>UPDATE_CHECK=0</code>。
+          </div>
+        </div>
+
+        <div class="card">
+          <div class="card-head">
+            <h2>更新说明</h2>
+            <span class="muted" id="update-notes-hint">来自最新 release</span>
+          </div>
+          <pre class="update-notes" id="update-notes">—</pre>
         </div>
       </div>
 

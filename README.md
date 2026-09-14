@@ -141,12 +141,13 @@ python main.py update --force    # 忽略 6 小时缓存，立刻重查
 python main.py update --json     # 给脚本用
 ```
 
-Studio「概览」页也有一张**版本与更新**卡：本地版本、最新 release、发布时间、发布页链接、
-更新说明，点「检查更新」忽略缓存重查。**只读** —— 不下载、不改任何文件，要不要更新你自己定：
+Studio「系统 → 版本更新」页也有一份：本地版本、最新 release、发布时间、更新说明，点「检查更新」忽略缓存重查，
+「打开发布页」用系统浏览器打开 release 页面。**只读** —— 不下载、不改任何文件，要不要更新你自己定：
 git 用户 `git pull`，zip 用户去发布页下载覆盖（`.env` 与 `memory\` 别覆盖）。
 
 * 本地版本取仓库根的 `VERSION`；没有就退回 `git describe --tags`；
-* 离线 / 被墙 / 限流（GitHub 匿名接口每小时 60 次）只影响那一行提示，Agent 照常用；
+* 连不上时（离线 / 代理 / 证书报 `SSLError`）会把每次尝试的原因写出来，并给出下一步：
+  代理地址填 `UPDATE_PROXY`，证书问题填 `UPDATE_CA_BUNDLE`（程序也会自己试 `.git\win-ca-bundle.pem`）；
 * 检查哪个仓库看 `.env` 的 `UPDATE_REPO`（默认 `sangonomiya249/GI_Agent`，fork 了改成自己的）；
   不想要这个功能就设 `UPDATE_CHECK=0`（完全不会碰网络）。
 * **维护者发版**：改 `VERSION` → 在 GitHub 上发布 release，tag 用同名的 `v1.0.1`

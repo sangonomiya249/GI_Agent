@@ -50,27 +50,36 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertIn("✅ 内嵌控制台容器存在", result.stdout)
         self.assertNotIn("❌", result.stdout)
 
-    def test_app_js_renders_the_update_card(self):
-        """概览页的「版本与更新」卡：要能渲染，点「检查更新」还要真的重查一次。"""
+    def test_app_js_renders_the_update_page(self):
+        """「系统 → 版本更新」页：四张卡 + 正文 + 更新说明 + 侧边栏红点 + 两个按钮。"""
         result = self._run(str(HARNESS))
 
         self.assertEqual(result.returncode, 0, f"{result.stdout}\n{result.stderr}")
         for line in (
-            "✅ 版本卡：写明本地版本 / 最新 release / 有新版本",
-            "✅ 版本卡：给出发布页链接与更新方式",
-            "✅ 版本卡：贴出更新说明",
-            "✅ 版本卡：点「检查更新」会忽略缓存重查（force=1）",
+            "✅ 版本页：四张卡写明本地版本 / 最新 release / 状态 / 检查方式",
+            "✅ 版本页：正文写清结论与更新方式",
+            "✅ 版本页：更新说明贴在下面那张卡",
+            "✅ 版本页：有新版本时侧边栏亮红点",
+            "✅ 版本页：「打开发布页」被启用且会走 /api/open",
+            "✅ 版本页：点「检查更新」会忽略缓存重查（force=1）",
+            "✅ 版本页：文案里不放 emoji（界面用自己的图标）",
         ):
             self.assertIn(line, result.stdout)
 
-    def test_update_card_elements_exist(self):
+    def test_update_page_elements_exist(self):
         html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
         js = APP_JS.read_text(encoding="utf-8")
 
-        self.assertIn('id="dash-update"', html)
-        self.assertIn('id="btn-update-check"', html)
+        # 版本更新是「系统」栏里的独立页面，不再是概览页里那张卡
+        self.assertIn('data-page="update"', html)
+        self.assertIn(">版本更新", html)
+        for element_id in ("update-cards", "update-body", "update-notes",
+                           "btn-update-check", "btn-update-open", "nav-badge-update"):
+            self.assertIn(f'id="{element_id}"', html, element_id)
+        self.assertNotIn('id="dash-update"', html)
         self.assertIn("/api/update", js)
         self.assertIn("loadUpdate", js)
+        self.assertIn('if (page === "update") loadUpdate();', js)      # 切到这一页才去查（走缓存）
 
     def test_app_js_renders_the_cooldown_page(self):
         """「资源冷却」页：切过去要能渲染出**类别切换 + 该类别自己的表**，点了还要能换。"""

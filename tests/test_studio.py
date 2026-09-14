@@ -653,11 +653,12 @@ class ApiTests(unittest.TestCase):
             "latest_version": "v1.5.0", "latest_name": "修了一堆坑",
             "latest_url": "https://github.com/sangonomiya249/GI_Agent/releases/tag/v1.5.0",
             "published_at": "2026-09-15T10:00:00Z", "notes": "· 修了 A",
-            "prerelease": False, "headline": "🎉 有新版本 v1.5.0（本地 1.0.0）",
+            "prerelease": False, "headline": "有新版本 v1.5.0（本地 1.0.0）",
             "detail": "GitHub 上是 v1.5.0，本地是 1.0.0", "error": "",
             "checked_at": "2026-09-15 20:00:00", "from_cache": False,
             "cache_age_hours": None, "repo": "sangonomiya249/GI_Agent",
             "update_hint": "在项目目录里执行 git pull",
+            "via": "系统 / 环境变量代理 + 证书 win-ca-bundle.pem",
         }
         seen = []
 
@@ -709,6 +710,24 @@ class ApiTests(unittest.TestCase):
 
         self.assertEqual(response.status_code, 500)
         self.assertIn("检查更新失败", response.get_json()["error"])
+
+    def test_open_endpoint_only_opens_github_links(self):
+        """「打开发布页」走 /api/open：只放行 github.com，别的 URL 一律拒绝。"""
+        opened = []
+        with patch.object(server.os, "startfile", side_effect=opened.append, create=True):
+            ok = self.client.post(
+                "/api/open",
+                json={"url": "https://github.com/sangonomiya249/GI_Agent/releases/tag/v1.0.0"},
+            )
+            bad = self.client.post("/api/open", json={"url": "https://example.com/x"})
+            local = self.client.post("/api/open", json={"url": "file:///C:/Windows/system32"})
+
+        self.assertEqual(ok.status_code, 200)
+        self.assertTrue(ok.get_json()["ok"])
+        self.assertEqual(opened, ["https://github.com/sangonomiya249/GI_Agent/releases/tag/v1.0.0"])
+        for response in (bad, local):
+            self.assertEqual(response.status_code, 400)
+            self.assertIn("GitHub", response.get_json()["error"])
 
     # ---------- 资源冷却页（Studio「资源冷却」） ----------
 

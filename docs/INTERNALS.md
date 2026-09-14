@@ -211,10 +211,20 @@ venv\Scripts\pip uninstall lark_oapi     # 约 37 MB：只有飞书通道才需�
   `v1.0.0-3-gabc1234` 这种"tag 之后又提交了几次"）/ `unknown`。`older` 不会提示更新。
 * **网络**：`GET api.github.com/repos/<owner>/<repo>/releases/latest`（匿名，每小时 60 次）。
   结果写进 `memory/update_check.json`，`UPDATE_CHECK_HOURS`（默认 6 小时）内复用；
-  `force=True` 忽略缓存。**失败不写缓存**（免得一次断网把结论锁住 6 小时）。
+  `force=True` 忽略缓存。**失败只缓存 `UPDATE_CHECK_ERROR_MINUTES`（默认 10 分钟）**——
+  否则离线时每次打开那一页都要白等一串重试，而完全不缓存又会反复打网络。
+* **连不上时的兜底链**（本机实测踩过：戴着代理时报 `SSLError`，git 也踩过同一个坑）：
+  连接方式依次试「系统/环境变量代理 → `UPDATE_PROXY`（若配了）→ 直连 → `127.0.0.1:7890`」，
+  每一组再依次试「requests 自带证书 → 额外 CA（`UPDATE_CA_BUNDLE` →
+  `REQUESTS_CA_BUNDLE`/`SSL_CERT_FILE` → 仓库里的 `.git/win-ca-bundle.pem`）」，
+  成功的那条组合记在结果的 `via` 里（页面/CLI 会显示"这次是从哪条路查到的"）。
+  失败时把最后几次的原因串起来（`证书校验失败` / `连不上` / `超时` 分开说），
+  并按"证书问题 / 连接问题"给不同的下一步提示。
 * **永不阻塞**：离线 / 被墙 / 限流 / 仓库没发布过 release / 甚至 fetch 自己抛异常，
   都被兜成一条人话（`status="error"`），调用方拿到的永远是能打印的结构。
   404 会再问一次仓库接口，区分"仓库不存在"和"还没发布过 release"。
+* **文案不带 emoji**：界面用自己的 SVG 图标（`ICONS`），终端直接看文字 ——
+  emoji 在不同系统/字体下长相差别很大，长在正文里只会添乱。
 * **只读**：不下载、不改任何文件。更新方式只给命令与链接（git 用户 `git pull`，
   zip 用户去发布页覆盖；`.env`、`memory\` 别覆盖）。
 * 出口：

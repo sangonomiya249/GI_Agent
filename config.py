@@ -299,3 +299,12 @@ UPDATE_REPO = get_env("UPDATE_REPO", "sangonomiya249/GI_Agent").strip()
 UPDATE_CHECK_HOURS = get_int_env("UPDATE_CHECK_HOURS", 6)
 # 单次请求超时（秒）：卡网的时候不要让 Studio 页面跟着卡
 UPDATE_CHECK_TIMEOUT = get_int_env("UPDATE_CHECK_TIMEOUT", 6)
+# 检查失败也缓存一会儿（分钟）：否则离线时每次打开页面都要白等一串重试
+UPDATE_CHECK_ERROR_MINUTES = get_int_env("UPDATE_CHECK_ERROR_MINUTES", 10)
+# 走哪个代理访问 GitHub。留空 = 先按系统/环境变量代理试，再试直连，
+# 最后还会试一次本机常见端口 127.0.0.1:7890（Clash / Mihomo）。
+UPDATE_PROXY = get_env("UPDATE_PROXY", "").strip()
+# 额外的 HTTPS CA 证书（pem）。留空 = 依次用 requests 自带证书库、
+# 环境变量里的 REQUESTS_CA_BUNDLE/SSL_CERT_FILE、以及仓库里 .git\win-ca-bundle.pem。
+# 本机有代理/杀软做 HTTPS 中间解密时，必须靠它，否则报 SSLError。
+UPDATE_CA_BUNDLE = get_env("UPDATE_CA_BUNDLE", "").strip()

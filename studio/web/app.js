@@ -23,6 +23,7 @@ const state = {
   cooldownCategory: "specialty",   //   当前看的是哪一类（点上面的类别 chip 切换）
   cooldownSearch: "",    //   页面上的筛选条件
   cooldownOnlyCooling: false,
+  update: null,          // 版本更新（/api/update 的最近一次结果）
 };
 
 /** 冷却页每个类别的图标（"地区特产"用叶子、"矿物"用地图…）。 */
@@ -72,6 +73,7 @@ const PAGE_META = {
   channels: ["远程通道", "QQ 机器人 / 飞书服务端：内嵌启停与日志，可随 Agent 自动启动"],
   config: ["配置", "图形化编辑 .env（保留注释，自动备份）"],
   guide: ["使用说明", "一条龙怎么配、要加哪些调度器、本软件与 PowerShell 怎么配"],
+  update: ["版本更新", "本地版本 vs GitHub 最新 release，要不要更新由你决定"],
   doctor: ["环境体检", "LLM / BetterGI / 脚本组 / 路径 / 事务，一次查完"],
   logs: ["BetterGI 日志", "直接读 BetterGI 自己的 log，已知问题自动标出来"],
   about: ["关于", "GI Agent Studio"],
@@ -142,62 +144,118 @@ function when(seconds) {
   return date.toLocaleString("zh-CN", { hour12: false });
 }
 
-/* ---------------- 版本与更新 ---------------- */
+/* ---------------- 版本更新（系统 → 版本更新） ---------------- */
 const UPDATE_TAGS = {
-  newer: "有新版本", same: "已是最新", older: "本地比 release 新",
-  unknown: "版本号认不出", error: "检查失败", disabled: "检查已关闭",
+  newer: ["有新版本", "warn", "refresh"],
+  same: ["已是最新", "ok", "check"],
+  older: ["本地比 release 新", "", "spark"],
+  unknown: ["版本号认不出", "", "info"],
+  none: ["还没有 release", "", "info"],
+  error: ["检查失败", "dim", "info"],
+  disabled: ["检查已关闭", "dim", "info"],
 };
 
 function renderUpdate(data) {
-  const box = $("#dash-update");
-  if (!box) return;
+  const body = $("#update-body");
+  const cards = $("#update-cards");
+  const notes = $("#update-notes");
+  if (!body) return;
+
   if (!data || !data.ok) {
-    box.innerHTML = `<div class="empty">${escapeHtml((data && data.error) || "读取失败")}</div>`;
+    body.innerHTML = `<div class="empty">${escapeHtml((data && data.error) || "读取失败")}</div>`;
+    if (cards) cards.innerHTML = "";
+    $("#update-hint").textContent = "读取失败";
+    setUpdateBadge(false);
     return;
   }
+
   const status = data.status || "error";
-  const tone = data.update_available ? "warn" : (status === "error" || status === "disabled" ? "dim" : "ok");
-  const parts = [];
-  parts.push(`<div class="row-actions tight">
-      <span class="tag ${tone}">${escapeHtml(UPDATE_TAGS[status] || status)}</span>
-      <span>本地 <b>${escapeHtml(data.local_version || "未知")}</b></span>
-      ${data.latest_version ? `<span class="muted">·</span><span>最新 <b>${escapeHtml(data.latest_version)}</b></span>` : ""}
-      ${data.published_at ? `<span class="muted">${escapeHtml(String(data.published_at).slice(0, 10))} 发布</span>` : ""}
-    </div>`);
-  parts.push(`<div style="margin-top:8px">${escapeHtml(data.headline || "")}</div>`);
-  if (data.detail && (status === "newer" || status === "older" || status === "unknown")) {
-    parts.push(`<div class="muted">${escapeHtml(data.detail)}</div>`);
+  const [label, tone, icon] = UPDATE_TAGS[status] || [status, "", "info"];
+  setUpdateBadge(Boolean(data.update_available));
+  $("#update-hint").textContent = data.checked_at ? `${data.checked_at} 读取` : "";
+
+  if (cards) {
+    cards.innerHTML = [
+      statCard({
+        label: "本地版本", value: data.local_version || "未知",
+        sub: `来源：${data.local_source || "未知"}`, icon: "folder",
+      }),
+      statCard({
+        label: "最新 release", value: data.latest_version || "—",
+        sub: data.latest_version ? `发布于 ${String(data.published_at || "").slice(0, 10) || "未知"}` : "仓库里还没有 release",
+        icon: "refresh", tone: data.update_available ? "warn" : "",
+      }),
+      statCard({
+        label: "状态", value: label,
+        sub: data.update_available ? "可以更新了" : (status === "error" ? "这一项没结论，其他功能照常" : "不需要做任何事"),
+        icon, tone,
+      }),
+      statCard({
+        label: "检查方式", value: data.via || "—",
+        sub: data.from_cache
+          ? `来自缓存（${typeof data.cache_age_hours === "number" ? data.cache_age_hours.toFixed(1) + " 小时前" : "之前"}）`
+          : "刚刚联网查的",
+        icon: "plug",
+      }),
+    ].join("");
   }
-  if (data.latest_url) {
-    parts.push(`<div style="margin-top:6px">发布页：<a class="link" href="${escapeHtml(data.latest_url)}" target="_blank" rel="noreferrer">${escapeHtml(data.latest_url)}</a></div>`);
+
+  const rows = [];
+  rows.push(`<div class="update-line"><span class="status-icon">${ICONS[icon] || ICONS.info}</span>${escapeHtml(data.headline || label)}</div>`);
+  if (data.detail && ["newer", "older", "unknown", "none"].includes(status)) {
+    rows.push(`<div class="muted">${escapeHtml(data.detail)}</div>`);
+  }
+  if (data.error && status === "error") {
+    rows.push(`<div class="muted update-error">${escapeHtml(data.error)}</div>`);
+    rows.push(`<div class="hint">只有这一页受影响：Agent / Studio / 跑图都不需要网络，照常用。`
+      + `如果本机开着代理（Clash 之类），把地址填进 <code>UPDATE_PROXY</code>；`
+      + `如果是证书报错（SSLError），把 Windows 根证书导出成 pem 填进 <code>UPDATE_CA_BUNDLE</code>。</div>`);
+  }
+  if (data.latest_version) {
+    rows.push(`<div class="muted">最新 release：<b>${escapeHtml(data.latest_version)}</b>`
+      + `${data.latest_name && data.latest_name !== data.latest_version ? `「${escapeHtml(data.latest_name)}」` : ""}`
+      + `${data.prerelease ? "（预发布）" : ""}</div>`);
   }
   if (status === "newer") {
-    parts.push(`<div class="hint">更新方式：${escapeHtml(data.update_hint || "")}</div>`);
+    rows.push(`<div class="hint">更新方式：${escapeHtml(data.update_hint || "")}</div>`);
   }
-  if (data.notes) {
-    parts.push(`<pre class="update-notes">${escapeHtml(data.notes)}</pre>`);
+  body.innerHTML = rows.join("");
+
+  const open = $("#btn-update-open");
+  if (open) open.disabled = !data.latest_url;
+  if (notes) {
+    notes.textContent = data.notes || "（这个 release 没写说明）";
+    $("#update-notes-hint").textContent = data.latest_version
+      ? `${data.latest_version} · 来自 GitHub release`
+      : "来自最新 release";
   }
-  if (data.from_cache) {
-    const age = typeof data.cache_age_hours === "number" ? `${data.cache_age_hours.toFixed(1)} 小时前` : "之前";
-    parts.push(`<div class="hint">结果来自缓存（${escapeHtml(age)}查的）；点「检查更新」立刻重查。</div>`);
-  }
-  if (status === "error") {
-    parts.push(`<div class="hint">只有这一张卡受影响：Agent / Studio / 跑图都不需要网络，照常用。</div>`);
-  }
-  box.innerHTML = parts.join("");
+  state.update = data;
+}
+
+/** 侧边栏「版本更新」上的小红点：有新版本才显示。 */
+function setUpdateBadge(show) {
+  const badge = $("#nav-badge-update");
+  if (badge && badge.classList) badge.classList.toggle("hidden", !show);
 }
 
 async function loadUpdate(force = false) {
-  const box = $("#dash-update");
-  if (box && force) box.innerHTML = `<div class="empty">正在问 GitHub…</div>`;
+  const body = $("#update-body");
+  if (body && force) body.innerHTML = '<div class="empty">正在问 GitHub…</div>';
   const data = await api(`/api/update${force ? "?force=1" : ""}`);
   renderUpdate(data);
 }
 
-function setupUpdateCard() {
+function setupUpdatePage() {
   const button = $("#btn-update-check");
-  if (button && button.addEventListener) {
-    button.addEventListener("click", () => loadUpdate(true));
+  if (button && button.addEventListener) button.addEventListener("click", () => loadUpdate(true));
+  const open = $("#btn-update-open");
+  if (open && open.addEventListener) {
+    open.addEventListener("click", async () => {
+      const url = (state.update && state.update.latest_url) || "";
+      if (!url) return;
+      const result = await api("/api/open", { method: "POST", body: { url } });
+      if (!result.ok) toast(result.error || "打不开链接", "error");
+    });
   }
 }
 
@@ -215,7 +273,8 @@ function switchPage(page) {
   if (page === "logs") loadBgiLog();
   if (page === "routes") loadRoutes();
   if (page === "cooldown") loadCooldown();
-  if (page === "dashboard") { loadBgiLog(true); loadUpdate(); }
+  if (page === "update") loadUpdate();
+  if (page === "dashboard") loadBgiLog(true);
   if (page === "channels") pollChannels();
 }
 
@@ -1150,7 +1209,7 @@ function bindEvents() {
   $("#log-file").addEventListener("change", () => loadBgiLog());
   $("#log-keyword").addEventListener("keydown", (event) => { if (event.key === "Enter") loadBgiLog(); });
   $("#dash-log-refresh").addEventListener("click", () => loadBgiLog(true));
-  setupUpdateCard();
+  setupUpdatePage();
 
   $("#modal-close").addEventListener("click", closeModal);
   $("#modal-mask").addEventListener("click", (event) => { if (event.target.id === "modal-mask") closeModal(); });
@@ -1260,6 +1319,8 @@ async function boot() {
   $("#about-root").textContent = state.env.project_root || "—";
   await pollLog();
   await pollChannels();
+  // 版本检查走缓存（不 force）：只为早点把侧边栏那个"有新版本"的红点点亮
+  loadUpdate();
   setTimeout(() => {
     if (state.page === "dashboard") loadBgiLog(true);
   }, 0);

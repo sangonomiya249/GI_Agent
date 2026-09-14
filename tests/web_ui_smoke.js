@@ -13,11 +13,11 @@ const source = fs.readFileSync(path.join(WEB, "app.js"), "utf8");
 const captured = {};
 
 function makeEl(id = "") {
+  const classes = new Set();
   const el = {
     id,
     innerHTML: "",
     textContent: "",
-    className: "",
     value: "",
     checked: false,
     disabled: false,
@@ -28,7 +28,17 @@ function makeEl(id = "") {
     style: {},
     childNodes: [],
     _on: {},
-    classList: { add() {}, remove() {}, toggle() {}, contains: () => false },
+    // classList 用真 Set 实现：页面切换、侧边栏红点都靠它，假的会让断言看不出问题
+    classList: {
+      add: (name) => classes.add(name),
+      remove: (name) => classes.delete(name),
+      toggle: (name, force) => {
+        const want = force === undefined ? !classes.has(name) : Boolean(force);
+        if (want) classes.add(name); else classes.delete(name);
+        return want;
+      },
+      contains: (name) => classes.has(name),
+    },
     addEventListener(type, handler) { (this._on[type] = this._on[type] || []).push(handler); },
     appendChild(child) { this.childNodes.push(child); return child; },
     removeChild(child) { this.childNodes = this.childNodes.filter((c) => c !== child); },
@@ -40,6 +50,13 @@ function makeEl(id = "") {
     focus() {},
     matches() { return false; },
   };
+  Object.defineProperty(el, "className", {
+    get() { return [...classes].join(" "); },
+    set(value) {
+      classes.clear();
+      String(value || "").split(/\s+/).filter(Boolean).forEach((name) => classes.add(name));
+    },
+  });
   Object.defineProperty(el, "innerHTML", {
     get() { return captured[el.id] ?? ""; },
     set(value) { captured[el.id] = value; },
@@ -147,15 +164,16 @@ const COOLDOWN = {
 COOLDOWN.materials = COOLDOWN.sections.flatMap((section) => section.materials);
 
 const UPDATE = {
-  ok: true, status: "newer", update_available: true,
+  ok: true, check_ok: true, status: "newer", update_available: true,
   local_version: "1.0.0", local_source: "VERSION",
   latest_version: "v1.5.0", latest_name: "修了一堆坑",
   latest_url: "https://github.com/sangonomiya249/GI_Agent/releases/tag/v1.5.0",
   published_at: "2026-09-15T10:00:00Z", notes: "· 修了 A\n· 修了 B",
-  prerelease: false, headline: "🎉 有新版本 v1.5.0（本地 1.0.0）",
+  prerelease: false, headline: "有新版本 v1.5.0（本地 1.0.0）",
   detail: "GitHub 上是 v1.5.0，本地是 1.0.0", error: "",
   checked_at: "2026-09-15 20:00:00", from_cache: false, cache_age_hours: null,
   repo: "sangonomiya249/GI_Agent", update_hint: "在项目目录里执行 git pull",
+  via: "系统 / 环境变量代理 + 证书 win-ca-bundle.pem",
 };
 
 const STATE = {
@@ -204,8 +222,8 @@ vm.createContext(sandbox);
     vm.runInContext(source, sandbox, { filename: "app.js" });
     // boot() 是异步的：让 API 的 microtask 跑完
     await settle();
-    // 概览页的「版本与更新」卡（boot 里 switchPage("run")，所以这里手动切过去）
-    sandbox.switchPage("dashboard");
+    // 「系统 → 版本更新」页（boot 里 switchPage("run")，所以这里手动切过去）
+    sandbox.switchPage("update");
     await settle();
     // 再切到「资源冷却」页，验证这条链路（/api/cooldown → 分类卡片 + 分区表格）也能渲染
     sandbox.switchPage("cooldown");
@@ -217,7 +235,12 @@ vm.createContext(sandbox);
 
   const channelsPage = captured["chan-cards"] || "";
   const dash = captured["dash-channels"] || "";
-  const updateBox = captured["dash-update"] || "";
+  const updateCards = captured["update-cards"] || "";
+  const updateBody = captured["update-body"] || "";
+  const updateNotes = elements.get("update-notes");
+  const updateNotesText = updateNotes ? updateNotes.textContent : "";
+  const updateBadge = elements.get("nav-badge-update");
+  const openButton = elements.get("btn-update-open");
   const coolTabs = captured["cooldown-tabs"] || "";
   const coolCards = captured["cooldown-cards"] || "";
   const coolTable = captured["cooldown-table"] || "";
@@ -244,7 +267,7 @@ vm.createContext(sandbox);
   clickTab("specialty");
   const backTable = captured["cooldown-table"] || "";
 
-  // 概览页的「版本与更新」：点「检查更新」要真的再拉一次（force=1）并重新渲染
+  // 「版本更新」页：点「检查更新」要真的再拉一次（force=1）并重新渲染
   const updateButton = elements.get("btn-update-check");
   const updateHandler = (updateButton._on.click || [])[0];
   let forceUsed = false;
@@ -255,7 +278,19 @@ vm.createContext(sandbox);
   };
   if (updateHandler) updateHandler({ target: updateButton });
   await settle();
-  const updateAfterClick = captured["dash-update"] || "";
+  const updateAfterClick = captured["update-body"] || "";
+
+  // 「打开发布页」：应该 POST /api/open（带上 release 链接），而不是让 WebView 自己跳转
+  const openHandler = (openButton && openButton._on.click || [])[0];
+  let openedUrl = "";
+  sandbox.fetch = async (url, init) => {
+    if (String(url).includes("/api/open")) {
+      openedUrl = JSON.parse((init && init.body) || "{}").url || "";
+    }
+    return originalFetch(url, init);
+  };
+  if (openHandler) openHandler({ target: openButton });
+  await settle();
   sandbox.fetch = originalFetch;
 
   const checks = [
@@ -266,13 +301,22 @@ vm.createContext(sandbox);
     ["未配置通道写明缺哪一项", channelsPage.includes("FEISHU_APP_ID")],
     ["自动启动勾选框", channelsPage.includes("data-chan-auto=\"qq\"")],
     ["概览摘要卡也有内容", dash.includes("QQ 机器人")],
-    ["版本卡：写明本地版本 / 最新 release / 有新版本",
-      updateBox.includes("有新版本") && updateBox.includes("1.0.0") && updateBox.includes("v1.5.0")],
-    ["版本卡：给出发布页链接与更新方式",
-      updateBox.includes("releases/tag/v1.5.0") && updateBox.includes("git pull")],
-    ["版本卡：贴出更新说明", updateBox.includes("修了 A")],
-    ["版本卡：点「检查更新」会忽略缓存重查（force=1）",
+    ["版本页：四张卡写明本地版本 / 最新 release / 状态 / 检查方式",
+      updateCards.includes("本地版本") && updateCards.includes("1.0.0")
+      && updateCards.includes("最新 release") && updateCards.includes("v1.5.0")
+      && updateCards.includes("有新版本") && updateCards.includes("检查方式")],
+    ["版本页：正文写清结论与更新方式",
+      updateBody.includes("有新版本") && updateBody.includes("git pull")],
+    ["版本页：更新说明贴在下面那张卡",
+      updateNotesText.includes("修了 A") && updateNotesText.includes("修了 B")],
+    ["版本页：有新版本时侧边栏亮红点",
+      updateBadge && !updateBadge.classList.contains("hidden")],
+    ["版本页：「打开发布页」被启用且会走 /api/open",
+      openButton && openButton.disabled === false && openedUrl.includes("releases/tag/v1.5.0")],
+    ["版本页：点「检查更新」会忽略缓存重查（force=1）",
       forceUsed && updateAfterClick.includes("v1.5.0")],
+    ["版本页：文案里不放 emoji（界面用自己的图标）",
+      !/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u.test(updateCards + updateBody)],
     ["冷却页：顶部有类别切换（特产/矿物/魔物）",
       coolTabs.includes('data-cool-tab="specialty"') && coolTabs.includes('data-cool-tab="mine"')
       && coolTabs.includes('data-cool-tab="hunt"')],
