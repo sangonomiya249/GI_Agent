@@ -104,7 +104,6 @@ const COOLDOWN = {
     {
       key: "specialty", label: "地区特产", hours: 48, note: "wiki：采集后 48 小时刷新",
       summary: { total: 2, cooling: 1, ready: 1, partial: 1, manual: 0 },
-      unsubscribed: [],
       materials: [
         material({
           material: "霜仙花", category: "specialty", category_label: "地区特产", hours: 48,
@@ -123,7 +122,6 @@ const COOLDOWN = {
     {
       key: "mine", label: "矿物", hours: 72, note: "水晶块 / 紫晶块：上次刷新后的第三日",
       summary: { total: 1, cooling: 0, ready: 1, partial: 0, manual: 0 },
-      unsubscribed: ["星银矿石", "铁块"],
       materials: [
         material({
           material: "水晶块", category: "mine", category_label: "矿物", hours: 72,
@@ -134,7 +132,6 @@ const COOLDOWN = {
     {
       key: "hunt", label: "敌人与魔物", hours: 12, note: "普通魔物 12 小时刷新",
       summary: { total: 1, cooling: 0, ready: 1, partial: 0, manual: 1 },
-      unsubscribed: ["蕈兽", "骗骗花"],
       materials: [
         material({
           material: "巡陆艇", category: "hunt", category_label: "敌人与魔物", hours: 12,
@@ -252,13 +249,14 @@ vm.createContext(sandbox);
     ["冷却页：部分完成标注出来了", coolTable.includes("慕风蘑菇") && coolTable.includes("部分完成")],
     ["冷却页：每行都有登记/清除按钮",
       coolTable.includes('data-cool-mark="霜仙花"') && coolTable.includes('data-cool-clear="霜仙花"')],
-    ["冷却页：页脚写明这一类没建组的材料", coolFoot.includes("都建过组了")],
+    ["冷却页：页脚写明清单来源（全量目录，不是上次跑的那些）",
+      coolFoot.includes("路线仓库全量目录") && coolFoot.includes("这一类共 <b>2</b> 种")],
     ["点「敌人与魔物」→ 表格换成魔物的", clicked && huntTable.includes("巡陆艇") && !huntTable.includes("霜仙花")],
     ["点「敌人与魔物」→ 卡片/标题/chip 高亮都跟着换",
       huntCards.includes("敌人与魔物 · 冷却中") && huntTitle.includes("敌人与魔物")
       && huntTabs.includes('class="chip active" data-cool-tab="hunt"')],
-    ["点「矿物」→ 显示矿物，页脚列出没建组的矿",
-      mineTable.includes("水晶块") && !mineTable.includes("巡陆艇") && mineFoot.includes("星银矿石")],
+    ["点「矿物」→ 显示矿物（页脚也跟着换）",
+      mineTable.includes("水晶块") && !mineTable.includes("巡陆艇") && mineFoot.includes("这一类共 <b>1</b> 种")],
     ["点回「地区特产」→ 恢复特产的表", backTable.includes("霜仙花") && !backTable.includes("水晶块")],
   ];
 

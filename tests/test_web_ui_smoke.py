@@ -64,10 +64,10 @@ class WebUiSmokeTests(unittest.TestCase):
             "✅ 冷却页：冷却中的目标带剩余时间",
             "✅ 冷却页：部分完成标注出来了",
             "✅ 冷却页：每行都有登记/清除按钮",
-            "✅ 冷却页：页脚写明这一类没建组的材料",
+            "✅ 冷却页：页脚写明清单来源（全量目录，不是上次跑的那些）",
             "✅ 点「敌人与魔物」→ 表格换成魔物的",
             "✅ 点「敌人与魔物」→ 卡片/标题/chip 高亮都跟着换",
-            "✅ 点「矿物」→ 显示矿物，页脚列出没建组的矿",
+            "✅ 点「矿物」→ 显示矿物（页脚也跟着换）",
             "✅ 点回「地区特产」→ 恢复特产的表",
         ):
             self.assertIn(line, result.stdout)
@@ -128,7 +128,7 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertIn("cooldown: [", js)          # PAGE_META 里有这一页，标题栏才对
         self.assertIn("loadCooldown", js)
         self.assertIn("data-cool-tab", js)        # 点类别切换（特产/矿物/食材/魔物）
-        self.assertIn("unsubscribed", js)         # 页脚会列"仓库里有、你没建组"的材料
+        self.assertIn("路线仓库", js)              # 页脚写清清单来自全量目录
         self.assertIn(".cooldown-tabs", css)
 
 

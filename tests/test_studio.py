@@ -672,18 +672,32 @@ class ApiTests(unittest.TestCase):
             item.start()
             self.addCleanup(item.stop)
 
-    def test_cooldown_endpoint_lists_what_is_not_in_any_group(self):
-        """页脚那句"仓库里有、你没建组"：接口要真的把材料名带出来。
+    def test_cooldown_endpoint_lists_the_whole_category_from_the_full_catalogue(self):
+        """接口要列出**整类材料**（来自归档里的全量清单），不是"上次跑过的那几种"。
 
-        玩家实测问过"食材与炼金怎么只有一个久雨莲，是读不到吗" ——
-        不是读不到，是他的脚本组里只有久雨莲；这里把两者的差集给出来。
+        玩家实测：面板里「食材与炼金」只有一个久雨莲，而他说「去采集竹笋」却能跑成功 ——
+        因为 `食材与炼金.json` 被 Agent 精简成了上次那几条，全量清单在 `.gi_agent_archive/` 里。
         """
         group_dir, group_path = self._write_map_group([
             {"name": "01-久雨莲-厄里那斯-7个.json",
              "folderName": "食材与炼金\\久雨莲", "type": "Pathing"},
         ])
+        # 归档：全量清单，多出甜甜花 / 薄荷（+ 一条挂在"作者目录"下的地名垃圾数据）
+        archive_dir = group_dir / ".gi_agent_archive"
+        archive_dir.mkdir(exist_ok=True)
+        (archive_dir / "地图素材.json").write_text(json.dumps({
+            "name": "地图素材",
+            "projects": [
+                {"name": "01-久雨莲-厄里那斯-7个.json",
+                 "folderName": "食材与炼金\\久雨莲", "type": "Pathing"},
+                {"name": "01-甜甜花-蒙德-9个.json",
+                 "folderName": "食材与炼金\\甜甜花", "type": "Pathing"},
+                {"name": "12-苔古荒原上方-6个.json",
+                 "folderName": "食材与炼金\\兽肉\\某作者", "type": "Pathing"},
+            ],
+        }, ensure_ascii=False), encoding="utf-8")
         pathing = self.root / "AutoPathing" / "食材与炼金"
-        for name in ("久雨莲", "甜甜花", "薄荷", "提瓦特食材一条龙"):
+        for name in ("久雨莲", "甜甜花", "薄荷"):
             (pathing / name).mkdir(parents=True, exist_ok=True)
         self._cooldown_env()
 
@@ -695,9 +709,11 @@ class ApiTests(unittest.TestCase):
             data = self.client.get("/api/cooldown").get_json()
 
         section = next(item for item in data["sections"] if item["key"] == "cook")
-        self.assertIn("久雨莲", [row["material"] for row in section["materials"]])
-        # 仓库里有、组里没有的：甜甜花 / 薄荷；整包脚本「一条龙」不算材料，久雨莲已建组
-        self.assertEqual(section["unsubscribed"], ["甜甜花", "薄荷"])
+        names = [row["material"] for row in section["materials"]]
+        self.assertIn("久雨莲", names)
+        self.assertIn("甜甜花", names, "归档里的全量材料也要列出来")
+        # 地名不是材料（`12-苔古荒原上方-6个.json` 挂在兽肉目录下，但仓库里没有「苔古荒原上方」这个目录）
+        self.assertNotIn("苔古荒原上方", names)
 
     def test_cooldown_endpoint_lists_materials_with_status(self):
         group_dir, group_path = self._write_map_group([

@@ -670,11 +670,14 @@ class ExtraGroupTests(unittest.TestCase):
         self.assertTrue(any(line.startswith("⚠️") for line in lines), lines)
 
 
-class UnsubscribedTests(unittest.TestCase):
-    """面板页脚那句"仓库里有路线、但你的脚本组里没有的材料"。
+class FullCatalogueTests(unittest.TestCase):
+    """材料清单来自**路线仓库的全量目录**（归档里的那个组），不是当前那份被精简过的组。
 
-    玩家实测问过："食材与炼金现在就一个久雨莲，而实际还有好多采集，是读不到还是？"
-    —— 不是读不到，是他的脚本组里只有久雨莲的路线；这里把差集算出来给他看。
+    玩家实测两件事（QQ 记录）：
+      · 「食材与炼金」当时只列出久雨莲 —— 因为 `食材与炼金.json` 那份被 Agent 精简过；
+      · 然后他说「去采集竹笋」**真的跑成功了**（3 条路线，7 分 47 秒）——
+        组文件被改写成只有 3 条竹笋，全量清单（2342 条 / 59 种材料）在 `.gi_agent_archive/` 里。
+    所以：清单/索引读归档全量，**分母**（比例判定）读当前那份组。
     """
 
     def setUp(self):
@@ -685,25 +688,29 @@ class UnsubscribedTests(unittest.TestCase):
         self.pathing_dir = os.path.join(self.root, "AutoPathing")
         os.makedirs(self.group_dir)
 
-        # 路线仓库：食材与炼金 4 个材料目录（一个是整包脚本，不算材料）
+        # 路线仓库：食材与炼金 4 个材料目录（一个是整包脚本，不算材料）+ 特产/矿物/魔物
         for name in ("久雨莲", "甜甜花", "薄荷", "提瓦特食材一条龙"):
             os.makedirs(os.path.join(self.pathing_dir, "食材与炼金", name))
-        # 地方特产：材料在"地区"下一层
         os.makedirs(os.path.join(self.pathing_dir, "地方特产", "璃月", "清心"))
         os.makedirs(os.path.join(self.pathing_dir, "地方特产", "璃月", "琉璃袋"))
-        # 矿物 / 魔物：材料就是一级目录；带括号备注的会剥掉
         os.makedirs(os.path.join(self.pathing_dir, "矿物", "铁块"))
         os.makedirs(os.path.join(self.pathing_dir, "敌人与魔物", "蕈兽"))
 
-        # 脚本组里只有 久雨莲 与 清心
-        with open(os.path.join(self.group_dir, "食材与炼金.json"), "w", encoding="utf-8") as handle:
-            json.dump({"name": "食材与炼金", "projects": [
-                {"name": "01-久雨莲-厄里那斯-7个.json", "folderName": "食材与炼金\\久雨莲"},
-            ]}, handle, ensure_ascii=False)
-        with open(os.path.join(self.group_dir, "地图素材.json"), "w", encoding="utf-8") as handle:
-            json.dump({"name": "地图素材", "projects": [
-                {"name": "09A-清心-层岩巨渊-32朵.json", "folderName": "地方特产\\璃月\\清心"},
-            ]}, handle, ensure_ascii=False)
+        # 当前那份组：只剩上次跑的久雨莲（模拟 Agent 精简过的样子）
+        self._write_group("食材与炼金.json", [
+            {"name": "01-久雨莲-厄里那斯-7个.json", "folderName": "食材与炼金\\久雨莲"},
+        ])
+        # 归档里的全量清单：还有甜甜花 / 薄荷；另外塞两条**地名当材料**的脏数据
+        self._write_group(os.path.join(".gi_agent_archive", "食材与炼金.json"), [
+            {"name": "01-久雨莲-厄里那斯-7个.json", "folderName": "食材与炼金\\久雨莲"},
+            {"name": "01-甜甜花-蒙德-9个.json", "folderName": "食材与炼金\\甜甜花"},
+            {"name": "02-薄荷-璃月-12个.json", "folderName": "食材与炼金\\薄荷"},
+            {"name": "12-苔古荒原上方-6个.json", "folderName": "食材与炼金\\兽肉\\某作者"},
+        ], mkdir=True)
+        self._write_group("地图素材.json", [
+            {"name": "09A-清心-层岩巨渊-32朵.json", "folderName": "地方特产\\璃月\\清心"},
+            {"name": "03-琉璃袋-层岩巨渊-8朵.json", "folderName": "地方特产\\璃月\\琉璃袋"},
+        ])
 
         for name, value in (
             ("BGI_SCRIPT_GROUP_DIR", self.group_dir),
@@ -720,6 +727,15 @@ class UnsubscribedTests(unittest.TestCase):
         gather_cooldown._ROUTE_INDEX_KEY["key"] = None
         gather_cooldown._ROUTE_TOTALS_CACHE_KEY["key"] = None
 
+    def _write_group(self, relative, projects, mkdir=False):
+        path = os.path.join(self.group_dir, relative)
+        if mkdir:
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as handle:
+            json.dump({"name": os.path.basename(relative)[:-5], "projects": projects},
+                      handle, ensure_ascii=False)
+        return path
+
     def test_pathing_walk_reads_materials_at_the_right_depth(self):
         self.assertEqual(gather_cooldown.pathing_materials("cook"), ["久雨莲", "甜甜花", "薄荷"])
         self.assertEqual(gather_cooldown.pathing_materials("specialty"), ["清心", "琉璃袋"])
@@ -730,23 +746,55 @@ class UnsubscribedTests(unittest.TestCase):
         """「提瓦特食材一条龙」是整包脚本，不是材料。"""
         self.assertNotIn("提瓦特食材一条龙", gather_cooldown.pathing_materials("cook"))
 
-    def test_unsubscribed_is_the_difference_to_the_groups(self):
-        self.assertEqual(gather_cooldown.unsubscribed_materials("cook"), ["甜甜花", "薄荷"])
-        self.assertEqual(gather_cooldown.unsubscribed_materials("specialty"), ["琉璃袋"])
-        self.assertEqual(gather_cooldown.unsubscribed_materials("mine"), ["铁块"])
+    def test_vocabulary_comes_from_the_archive_not_the_shrunk_group(self):
+        vocabulary = gather_cooldown.route_material_vocabulary()
 
-    def test_sections_carry_the_unsubscribed_list(self):
+        self.assertIn("甜甜花", vocabulary)      # 只在归档里
+        self.assertIn("薄荷", vocabulary)
+        self.assertIn("久雨莲", vocabulary)      # 两边都有
+        self.assertIn("琉璃袋", vocabulary)      # 地图素材组（还没被精简过）
+
+    def test_place_names_are_not_materials(self):
+        """归档里那条 `12-苔古荒原上方-6个.json` 挂在兽肉目录下 → 材料是「兽肉」，不是地名。
+
+        ⚠️ 这里故意只造了「兽肉」这个目录但没有仓库目录？—— 有：`食材与炼金/兽肉` 没建，
+        所以这条会被仓库校验挡掉（宁缺勿滥），不会变成「苔古荒原上方」。
+        """
+        vocabulary = gather_cooldown.route_material_vocabulary()
+
+        self.assertNotIn("苔古荒原上方", vocabulary)
+        self.assertNotIn("苔古荒原上方", gather_cooldown.material_category_index())
+
+    def test_route_index_still_maps_the_shrunk_route_name(self):
+        """日志里只有文件名，且文件名不含材料（`01-久雨莲-…` 之外的那类）→ 靠归档索引回查。"""
+        self.assertEqual(
+            gather_cooldown.material_for_route("02-薄荷-璃月-12个.json"), "薄荷"
+        )
+
+    def test_totals_use_the_current_group_as_the_denominator(self):
+        """分母只看**当前那份组**：跑竹笋时组里就 3 条，不能拿全量 2342 条当分母。"""
+        totals = gather_cooldown.route_totals()
+
+        self.assertEqual(totals.get("久雨莲"), 1)     # 当前组里就 1 条
+        self.assertIsNone(totals.get("甜甜花"))       # 归档里有、当前组里没有 → 不设分母
+        self.assertEqual(totals.get("清心"), 1)
+        self.assertEqual(totals.get("琉璃袋"), 1)
+
+    def test_sections_list_the_whole_category(self):
         data = gather_cooldown.overview()
 
         sections = {section["key"]: section for section in data["sections"]}
-        self.assertEqual(sections["cook"]["unsubscribed"], ["甜甜花", "薄荷"])
-        self.assertEqual(sections["specialty"]["unsubscribed"], ["琉璃袋"])
+        names = {row["material"] for row in sections["cook"]["materials"]}
+        self.assertTrue({"久雨莲", "甜甜花", "薄荷"} <= names, names)
 
-    def test_missing_pathing_dir_is_tolerated(self):
+    def test_missing_pathing_dir_falls_back_to_the_old_reading(self):
+        """没装 BetterGI / 读不到仓库目录时，退回老的"文件名优先"读法，别把清单清空。"""
         with patch.object(config, "BGI_AUTO_PATHING_DIR", os.path.join(self.root, "没有这个目录")):
             gather_cooldown._PATHING_CACHE.update({"key": None, "names": {}})
+            gather_cooldown._ROUTE_INDEX_KEY["key"] = None
+
             self.assertEqual(gather_cooldown.pathing_materials_all(), {})
-            self.assertEqual(gather_cooldown.unsubscribed_materials("cook"), [])
+            self.assertIn("久雨莲", gather_cooldown.route_material_vocabulary())
 
 
 class PromptBlockTests(unittest.TestCase):

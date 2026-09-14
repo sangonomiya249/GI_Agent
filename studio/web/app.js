@@ -699,23 +699,17 @@ function cooldownTableBody(section) {
   return `<tr><td colspan="5"><div class="empty">${what}</div></td></tr>`;
 }
 
-/** 页脚：这一类的依据 + "仓库里有路线、但你没建组"的材料（玩家实测问过这个）。 */
+/** 页脚：这一类的口径说明（数据从哪来、怎么登记自己采的）。 */
 function cooldownFoot(section, data) {
   if (!section) return "";
-  const un = section.unsubscribed || [];
   const parts = [];
+  parts.push(`这一类共 <b>${section.summary ? section.summary.total || 0 : 0}</b> 种，` +
+    `刷新 <b>${section.hours} 小时</b>（${escapeHtml(section.note || "")}）。` +
+    `清单来自 BetterGI 的<b>路线仓库全量目录</b>（Agent 精简过的脚本组只是一次run 的临时样子），` +
+    `所以"没跑过的"也在表里，显示为「没有记录（按已刷新处理）」。`);
   parts.push(`数据来自 <b>BetterGI 自己的日志</b>（每条路线跑完都会记一笔），所以你在 BGI 里手动跑的也算。`);
   parts.push(`自己<b>在游戏里采过</b>（日志里没有的）：点那行的「记为刚刷过」即可，等价于
     <code>python -m skills.gather_cooldown --manual 霜仙花</code>；点「清除」把记录删掉。`);
-  if (un.length) {
-    const shown = un.slice(0, 40).map(escapeHtml).join("、");
-    parts.push(`📦 <b>${escapeHtml(section.label)}</b>这一类，BetterGI 的路线仓库里还有
-      <b>${un.length}</b> 种你的脚本组里没有的：${shown}${un.length > 40 ? "…" : ""}<br />
-      <span class="muted">没有脚本组就没有路线可开关，Agent 也跑不了它们 ——
-      在 BetterGI 里订阅 / 建组之后，它们才会出现在这张表里。</span>`);
-  } else {
-    parts.push(`📦 路线仓库里这一类能跑的材料，你都建过组了。`);
-  }
   return parts.join("<br />");
 }
 

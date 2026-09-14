@@ -349,28 +349,42 @@ def _route_totals_cache():
 
 
 def route_totals():
-    """{材料名: 脚本组里这种材料一共有几条路线}（按组文件 mtime 缓存）。
+    """{材料名: 这种材料**当前脚本组里**有几条路线}（按组文件 mtime 缓存）。
 
     为什么要它：**防闪退隔离带**会给"没被点名"的材料也打开一条路线（每连续 150 条 Disabled
     强制开一条）。玩家实测的坑：只跑了 1 条隔离带的路线，整种材料就被算成"采过了"、白等 48 小时
     （万相石 1/16、晶化骨髓 1/6、琉鳞石 1/6、星螺 1/5）。所以必须拿"跑了几条 / 一共几条"来判。
 
-    组的来源见 `_group_scan()`：四个资源总组 **+ 玩家自建的魔物 / 材料小组**
-    （蕈兽.json、虹滴晶.json…），这样"打蕈兽"这种目标也有可比的分母。
+    ⚠️ 这里刻意用**组文件本身**（`load_group`），不是归档里的全量清单：
+    真正跑的是 Agent 精简 / 开关之后的那几条（实测「食材与炼金」全量 2342 条，
+    跑竹笋时组里只有 3 条）。分母要是全量，"跑了 3 条竹笋"会算成 3/2342 → 永远判成"没跑完"。
+    组的来源：四个资源总组 + 玩家自建的魔物 / 材料小组（蕈兽.json、虹滴晶.json…），
+    这样"打蕈兽"这种目标也有可比的分母。
     """
     key = _group_scan_key(force=_ROUTE_TOTALS_CACHE_KEY.get("key") is None)
     if _ROUTE_TOTALS_CACHE_KEY.get("key") == key:
         return _ROUTE_TOTALS
 
-    key, entries = _group_scan()
-    if entries is None:          # 组读不了：保持上次结果
+    try:
+        from skills import route_group
+    except Exception:        # noqa: BLE001
         return _ROUTE_TOTALS
 
+    repo = pathing_materials_all()
+    every_repo_material = set()
+    for names in repo.values():
+        every_repo_material |= set(names)
+
     totals = {}
-    for _category, _path, project in entries:
-        material = _material_from_project_checked(project)
-        if material and _looks_like_material(material):
-            totals[material] = totals.get(material, 0) + 1
+    seen_paths = [path for _category, path in _collect_group_paths() if path]
+    seen_paths += list(_extra_group_paths())
+    for path in seen_paths:
+        group = route_group.load_group(path) or {}
+        for project in group.get("projects") or []:
+            material = _material_from_project_validated(project, every_repo_material) \
+                or _material_from_project_checked(project)
+            if material and _looks_like_material(material):
+                totals[material] = totals.get(material, 0) + 1
 
     _ROUTE_TOTALS.clear()
     _ROUTE_TOTALS.update(totals)
@@ -495,9 +509,8 @@ def status(material, now=None, events=None, category=None, totals=None):
 def category_sections(rows):
     """把 `status()` 的结果按类别分组（Studio 页面 / CLI 都用它排版）。
 
-    返回 [{key, label, hours, note, materials:[...], summary:{...}, unsubscribed:[...]}]，
+    返回 [{key, label, hours, note, materials:[...], summary:{...}}]，
     顺序固定为地区特产 → 矿物 → 食材与炼金 → 敌人与魔物；每个类别内部：**冷却中的在前**。
-    `unsubscribed` = 这一类里"路线仓库下载了、但脚本组里没有"的材料（只做提示）。
     """
     sections = []
     for category in CATEGORY_ORDER:
@@ -514,7 +527,6 @@ def category_sections(rows):
             "default_hours": category_default_hours(category),
             "note": CATEGORY_NOTES.get(category, ""),
             "materials": items,
-            "unsubscribed": unsubscribed_materials(category),
             "summary": {
                 "total": len(items),
                 "cooling": sum(1 for row in items if row["cooling"]),
@@ -768,6 +780,17 @@ def _enemy_base_dir():
     return os.path.join(root, "敌人与魔物") if root else ""
 
 
+def _archive_mtime(group_path):
+    """全量清单归档（`ScriptGroup/.gi_agent_archive/<组名>`）的 mtime；没有就给 None。"""
+    try:
+        from skills import route_group
+
+        archive = route_group.archive_path_for(group_path)
+    except Exception:        # noqa: BLE001
+        return None
+    return os.path.getmtime(archive) if archive and os.path.isfile(archive) else None
+
+
 def _subdir_names(path):
     """一个目录下的子目录名（没有就返回空集合）。"""
     if not path or not os.path.isdir(path):
@@ -832,18 +855,12 @@ def pathing_materials_all():
 
 
 def pathing_materials(category):
-    """这一类"路线仓库里下载了路线"的材料名（排序后）。"""
-    return sorted(pathing_materials_all().get(str(category or ""), set()))
+    """这一类"路线仓库里下载了路线"的材料名（排序后）。
 
-
-def unsubscribed_materials(category):
-    """这一类里"仓库里有路线、但你的脚本组里没有"的材料。
-
-    它们在面板上只当提示：**没有组就没有路线可开关**，Agent 也跑不了
-    （能跑什么取决于你在 BetterGI 里订阅/建好的组）。
+    用途有两个：给全量组里的路线**校验材料名**（挡住地名/整包脚本），
+    以及命令行 `--materials` 列出"这一类到底有些什么"。
     """
-    known = route_material_vocabulary((category,))
-    return [name for name in pathing_materials(category) if name not in known]
+    return sorted(pathing_materials_all().get(str(category or ""), set()))
 
 
 def enemy_route_names():
@@ -971,6 +988,8 @@ def _group_scan_key(force=False):
         else:
             mtime = None
         parts.append((str(category), str(path), mtime))
+        # 归档里的**全量清单**也要进键：索引读的是它，Agent 重新归档一次就得重扫
+        parts.append(("archived", str(path), _archive_mtime(path)))
     for name in _extra_group_names(dir_files):
         parts.append(("", name, dir_files.get(name)))
     base = _enemy_base_dir()
@@ -1034,11 +1053,38 @@ def _material_from_project_checked(project):
     return from_folder or from_name
 
 
+def _material_from_project_validated(project, repo_materials):
+    """全量组里的一条路线 → 材料名，**用路线仓库的目录名做校验**。
+
+    为什么要校验：`食材与炼金` 的全量清单有 2342 条路线，很多文件名/目录名其实是**地名**
+    （`12-苔古荒原上方-6个.json`、`苔骨荒原右下`、`星砂滩右上`…），老逻辑会把它们当材料读出来，
+    冷却面板里就会冒出一堆根本不能采的东西。只有能在
+    `AutoPathing/<类目>/<材料>`（特产是 `<类目>/<地区>/<材料>`）里找到同名目录的名字才算材料。
+
+    仓库目录读不到（没装 BetterGI / 测试环境）时退回老逻辑 `_material_from_project_checked()`。
+    """
+    if not repo_materials:
+        return _material_from_project_checked(project)
+
+    folder = str((project or {}).get("folderName") or "")
+    for segment in reversed([part for part in folder.replace("/", "\\").split("\\") if part]):
+        candidate = _clean_pathing_name(segment.split("@")[0]).split("[")[0].strip()
+        if candidate and candidate in repo_materials:
+            return candidate
+
+    from_name = _material_from_route_name((project or {}).get("name"))
+    if from_name and from_name in repo_materials:
+        return from_name
+    return ""
+
+
 def _group_scan():
     """(缓存键, [(类别, 组路径, 路线项目)]) —— 所有"能定出资源类别"的组与路线。
 
-    两类来源：四个资源**总组**（类别由配置直接决定）+ 目录里**其它组**的
-    能定出类别的路线（见 `_category_for_project`）。
+    ⚠️ 读的是**全量清单**（`route_group.load_full_group()`，归档优先）：
+    Agent 每次跑完会把脚本组精简成"本次要跑的那几条"（`食材与炼金.json` 实测只剩 3 条竹笋），
+    真正的全量清单（2342 条、59 种材料）在 `ScriptGroup/.gi_agent_archive/` 里。
+    只读组文件会把"能采什么"判成"上次跑过什么"。
     组文件读不出来时返回 `(键, None)` —— 调用方据此**保持上次结果**，别把索引清空。
     """
     key = _group_scan_key()
@@ -1047,22 +1093,26 @@ def _group_scan():
     except Exception:        # noqa: BLE001
         return key, None
 
+    repo = pathing_materials_all()
+    every_repo_material = set()
+    for names in repo.values():
+        every_repo_material |= set(names)
+
     entries = []
     for category, path in _collect_group_paths():
         if not path or not os.path.isfile(path):
             continue
-        group = route_group.load_group(path) or {}
-        for project in group.get("projects") or []:
+        full, _source, _archived = route_group.load_full_group(path)
+        for project in (full or {}).get("projects") or []:
             entries.append((category, path, project))
 
     for path in _extra_group_paths():
         if not os.path.isfile(path):
             continue
-        group = route_group.load_group(path) or {}
-        for project in group.get("projects") or []:
-            category = _category_for_project(
-                _material_from_project_checked(project), project.get("folderName")
-            )
+        full, _source, _archived = route_group.load_full_group(path)
+        for project in (full or {}).get("projects") or []:
+            material = _material_from_project_validated(project, every_repo_material)
+            category = _category_for_project(material, project.get("folderName"))
             if category:
                 entries.append((category, path, project))
 
@@ -1079,10 +1129,11 @@ def _refresh_route_index():
     if entries is None:          # 组读不了：保持上次索引，别清空
         return
 
+    repo = pathing_materials_all()
     index, categories = {}, {}
     for category, _path, project in entries:
         name = os.path.basename(str(project.get("name") or ""))
-        material = _material_from_project_checked(project)
+        material = _material_from_project_validated(project, repo.get(category) or set())
         if not material:
             continue
         if name:
