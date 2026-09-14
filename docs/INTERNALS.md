@@ -52,9 +52,6 @@ GI_Agent-main/
 
 ---
 
-
----
-
 ## 体积与瘦身
 
 `GI-Agent-Studio.exe` 只有约 2 MB —— 它是个 **WinForms + WebView2 的壳**：界面用系统里的 WebView2 渲染
