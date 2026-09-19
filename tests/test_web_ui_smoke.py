@@ -124,7 +124,7 @@ class WebUiSmokeTests(unittest.TestCase):
         self.assertEqual(missing, [], f"这些 id 在 index.html 里找不到：{missing}")
 
     def test_mys_panel_elements_exist(self):
-        """配置页里的米游社面板（状态 + 验证 Cookie + 拉名单）要整块存在。"""
+        """配置页里的米游社面板（状态 + 验证 Cookie + 拉名单 + 扫码登录）要整块存在。"""
         from pathlib import Path
 
         html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
@@ -134,6 +134,37 @@ class WebUiSmokeTests(unittest.TestCase):
             self.assertIn(f'id="{element_id}"', html, element_id)
         self.assertIn("/api/mys", js)
         self.assertIn("MYS_COOKIE", Path(PROJECT_ROOT / "skills" / "env_config.py").read_text(encoding="utf-8"))
+
+    def test_mys_scan_login_panel_exists(self):
+        """扫码登录那一套：按钮 / 面板 / 进度区 / 取消 / 手动粘贴 + 四个接口调用。
+
+        为什么单独一条：这是**替玩家拿 ltoken** 的唯一入口（网页复制到的 cookie 常常只有 v2），
+        少了任何一个 id，界面上就是"点了没反应"。
+        """
+        from pathlib import Path
+
+        html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")
+        js = APP_JS.read_text(encoding="utf-8")
+        css = (PROJECT_ROOT / "studio" / "web" / "app.css").read_text(encoding="utf-8")
+
+        for element_id in ("btn-mys-scan", "btn-mys-scan-web", "mys-scan-panel", "mys-scan-hint",
+                           "mys-scan-progress", "btn-mys-scan-cancel", "btn-mys-scan-manual"):
+            self.assertIn(f'id="{element_id}"', html, element_id)
+        for endpoint in ("/api/mys/login/status", "/api/mys/login/cancel", "/api/mys/login/manual"):
+            self.assertIn(endpoint, js, endpoint)
+        # ★ 扫码那两个接口按"app 版没有前缀 / 网页版加 /web"拼：
+        #     app → `/api/mys/login/start`、`/api/mys/login/poll`
+        #     web → `/api/mys/login/web/start`、`/api/mys/login/web/poll`
+        #   踩过的坑：按 kind 直接拼出 `.../login/` + `app/start` —— 那个路径不存在，
+        #   POST 落到 SPA 兜底路由，玩家点「扫码登录」只看到一坨 `405 Method Not Allowed` 的 HTML。
+        self.assertIn('`/api/mys/login${mysScanKind === "web" ? "/web" : ""}/start`', js)
+        self.assertIn('`/api/mys/login${mysScanKind === "web" ? "/web" : ""}/poll`', js)
+        self.assertNotIn("/api/mys/login/app/", js)
+        self.assertIn("startMysScan", js)
+        self.assertIn("pollMysScan", js)
+        self.assertIn(".scan-panel", css)
+        # 面板默认是收起的（没点之前不该占地方）
+        self.assertIn('class="scan-panel hidden"', html)
 
     def test_channel_elements_exist_in_html(self):
         html = (PROJECT_ROOT / "studio" / "web" / "index.html").read_text(encoding="utf-8")

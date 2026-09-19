@@ -254,6 +254,65 @@ def check_mys_showcase(env_values=None):
     return rows
 
 
+def check_growth(env_values=None):
+    """角色养成系统的体检（**不发任何网络请求**）。
+
+    只看四件事：cookie 完不完整（缺 ltoken 是实测最常见的坑）、有没有配 cookie、
+    库存快照多久没同步了、有没有已经配好的角色目标。
+    """
+    rows = []
+    try:
+        from brain import growth_db
+        from skills import mys_api, mys_inventory
+
+        # ① cookie 完整性：缺 ltoken 时"能列出角色但需要登录的接口全失败"，
+        #    这个现象最容易让人对着 cookie 干瞪眼，所以单独报一行。
+        audit = mys_api.audit_cookie()
+        if audit["configured"] and not audit["ok"]:
+            names = "、".join("/".join(item["keys"]) for item in audit["missing"])
+            rows.append(_error(
+                f"角色养成：米游社 cookie 不完整（缺 {names}）—— "
+                "公共接口能过，但**养成计算器与战绩接口会一直报未登录**。"
+                "v2 的 ltoken_v2 不能代替 ltoken；改法见 docs/MYS_COOKIE.md 第 2 节"
+            ))
+
+        status = mys_inventory.status()
+        if not status.get("configured"):
+            rows.append(_info(
+                "角色养成：未配置米游社 Cookie —— 只能读本地已有的快照，"
+                "材料需求算不出来（养成计算器需要 cookie）。见 docs/MYS_COOKIE.md"
+            ))
+        elif not status.get("available"):
+            rows.append(_warn(
+                "角色养成：配了 cookie，但还没同步过库存 —— "
+                "在 Studio 的「角色养成」页点「同步米游社库存」，或跑 python -m skills.mys_inventory --sync"
+            ))
+        elif status.get("stale"):
+            rows.append(_warn(
+                f"角色养成：库存已过期（{status.get('age_text')}同步，阈值 "
+                f"{config.GROWTH_INVENTORY_STALE_HOURS} 小时）—— 材料缺口可能不准，建议先同步"
+            ))
+        else:
+            rows.append(_ok(
+                f"角色养成：库存 {status.get('item_count')} 种材料，"
+                f"{status.get('age_text')}同步（UID {status.get('uid') or '—'}）"
+            ))
+
+        targets = growth_db.list_targets(enabled_only=True)
+        if targets:
+            names = "、".join(str(row.get("character_name") or row.get("character_id"))
+                              for row in targets[:6])
+            rows.append(_ok(f"角色养成：已配置 {len(targets)} 个角色的养成目标（{names}…）"))
+        else:
+            rows.append(_info(
+                "角色养成：还没有配置任何角色目标 —— 在 Studio 的「角色养成」页添加"
+                "（或说「把胡桃拉到 90，天赋 10/10/10，武器 90」让 Agent 去配）"
+            ))
+    except Exception as exc:            # noqa: BLE001 —— 体检本身永远不该炸
+        rows.append(_warn(f"角色养成：体检失败（{type(exc).__name__} {exc}）"))
+    return rows
+
+
 def check_window_focus():
     """原神窗口前后台相关的 BetterGI 设置（"卡死"的头号原因）。"""
     rows = []
@@ -531,6 +590,7 @@ def run_health_check(env_path=None):
     rows.extend(check_llm_config(env_values))
     rows.extend(check_channels(env_values))
     rows.extend(check_mys_showcase(env_values))
+    rows.extend(check_growth(env_values))
     rows.extend(check_bettergi(env_values))
     rows.extend(check_scheduled_tasks())
     rows.extend(check_window_focus())

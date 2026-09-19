@@ -54,6 +54,18 @@ def reply(target: str, text: str) -> None:
     feishu_api.send_feishu_msg(target, text)
 
 
+def _drop_growth_queue(reason=""):
+    """放弃分批次执行队列（玩家取消 / 改说别的时调用）。失败只打日志，不影响对话。"""
+    try:
+        from brain import execution_queue
+
+        if execution_queue.is_stepwise():
+            execution_queue.skip(reason)
+            print(f"🚫 分批次队列已放弃：{reason}")
+    except Exception as exc:                # noqa: BLE001
+        print(f"⚠️ 放弃分批次队列失败（{type(exc).__name__}: {exc}）")
+
+
 def handle_message(msg_content: str, target: str) -> None:
     """处理一条玩家消息（阻塞：大模型思考在后台线程里跑，这里立刻返回）。
 
@@ -62,6 +74,12 @@ def handle_message(msg_content: str, target: str) -> None:
     store = memory_manager.load_chat_store()
     uid = store.get("uid", config.DEFAULT_UID)
     messages = store.get("messages", [])
+
+    # ★ 记住"上次跟谁说话" —— 主动推送（启动推送执行目标、跑完推下一条路线）全靠它。
+    #   以前**没有任何地方写过这个键**，于是 `growth_planner._push_growth_notice()` 找不到目标，
+    #   只能打一行日志：玩家看到的就是"本地处理完了，QQ 一条都没收到"（被反馈过）。
+    if target:
+        store["last_target"] = str(target)
 
     # 🌟 每条消息都刷新展柜（失败时保留旧缓存，不覆盖成错误信息）
     _refreshed, env_notice = refresh_store_env_context(store, uid)
@@ -139,15 +157,33 @@ def handle_message(msg_content: str, target: str) -> None:
         reply(target, "🚫 已放弃上一次的系统操作（关闭原神）。如需执行请重新说一次。")
         pending_task = None
 
+    # ★ 待审批的是**分批次的一条路线**，而玩家回的是别的内容：
+    #   放弃整条队列（不然它会一直挂着'第 N 条'，之后每次说话都被重新问一遍），
+    #   然后把这句话当成新请求交给大模型（规格原话："再参考这一条请求来执行"）。
+    if pending_task and pending_task.get("growth_step") and user_input not in APPROVE_WORDS \
+            and user_input not in CANCEL_WORDS:
+        print("\n⏭️ 玩家没有确认这一条路线，放弃分批次队列，按新请求处理。")
+        store["pending_task"] = None
+        memory_manager.save_chat_store(store)
+        _drop_growth_queue("玩家改说了别的")
+        reply(target, "⏭️ 已放弃分批次队列（本次没有启动 BetterGI）。下面按你说的来 ——")
+        pending_task = None
+
     if pending_task:
         bgi_cmd = pending_task.get("bgi_cmd")
         stored_uid = pending_task.get("uid", uid)
+        # ★ 分批次执行（`GROWTH_EXECUTION_MODE=stepwise`）挂上来的那一步：
+        #   玩家回 y → 跑这一条（下面照常走审批）；回"取消"或说别的 → **放弃整个队列**，
+        #   按玩家这次说的来（规格："若用户回答 no，或者发送其它请求再参考这一条请求来执行"）。
+        is_growth_step = bool(pending_task.get("growth_step"))
 
         if user_input in CANCEL_WORDS:
             # 取消 = 什么都不做（不写配置、不启动 BetterGI），也不去打扰大模型
             print("\n🚫 计划已取消。")
             store["pending_task"] = None
             memory_manager.save_chat_store(store)
+            if is_growth_step:
+                _drop_growth_queue("玩家取消了分批次执行")
             reply(target, "🚫 已取消本轮计划：没有写任何配置，也没有启动 BetterGI。")
             return
 

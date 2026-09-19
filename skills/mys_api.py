@@ -28,6 +28,8 @@ import json
 import os
 import random
 import re
+import secrets
+import string
 import time
 import uuid
 from hashlib import md5
@@ -110,6 +112,80 @@ def cookie_configured():
     return bool(str(config.MYS_COOKIE or "").strip())
 
 
+# 米游社 cookie 的三种"代"：
+#   v1（ltuid / account_id / ltoken / cookie_token）—— 老接口（战绩、计算器活动）只认这套；
+#   v2（*_v2）—— 现在的网页登录只发这套，给新版网关与 App 用；
+#   device（_MHYUUID / DEVICEFP*）—— 设备指纹，给风控用。
+#
+# ⚠️ 实测踩过（玩家报障）：从 www.mihoyo.com 网页复制下来的 cookie **可能只有 v2**，
+#    公共接口（getUserGameRolesByCookie）照样能用、能列出角色，于是"看起来配好了"；
+#    但**需要 ltoken 的接口全部失败**：
+#      · 养成计算器 /v1/sync/avatar/list → retcode -100「请先登录后参与活动」
+#      · 战绩 character/list            → retcode 5003
+#    v2 的 ltoken_v2 **不能**当 ltoken 用（试过：补成 v1 键名、放进 x-rpc-ltoken 头都不行）。
+#    所以必须显式把"缺 ltoken"这件事说出来，而不是让玩家对着"未登录"猜。
+_REQUIRED_COOKIE_KEYS = (
+    (("ltuid", "account_id"), "账号 id（哪个号）"),
+    (("ltoken", "cookie_token"), "长期令牌（战绩接口与养成计算器必须要）"),
+)
+
+
+def audit_cookie(cookie=None):
+    """检查 cookie 完不完整。返回 `{"ok", "missing": [{keys, why}], "mode", "has_v2", "hint"}`。
+
+    两种"够用"的形态（`mode` 字段标出来）：
+
+      · `mode="app"`        —— 有 v1 `ltoken`（**扫码登录**拿到的）。养成计算器要的
+        单角色状态 / 算材料 / 战绩接口都认它；
+      · `mode="calculator"`—— 只有网页那套（`ltoken_v2` / `cookie_token_v2` /
+        `account_id_v2`）。这是**在养成计算器网页上登录**得到的会话。
+        ⚠️ 实测：`ltoken_v2` **不能**当 v1 `ltoken` 用（补成 v1 键名、放 `x-rpc-ltoken`
+        头都不行），所以这类 cookie 只标"能用"，不假装它等于 v1。
+
+    `ok=False` 表示"连账号 id 都没有"——那种 cookie 一定会被拒。
+    """
+    text = str(cookie if cookie is not None else config.MYS_COOKIE or "")
+    if not text.strip():
+        return {"ok": False, "configured": False, "missing": [], "has_v2": False,
+                "mode": "", "hint": "没有配置 MYS_COOKIE"}
+
+    keys = set()
+    for chunk in text.split(";"):
+        if "=" in chunk:
+            keys.add(chunk.strip().split("=", 1)[0].strip())
+
+    has_v1 = bool({"ltoken", "cookie_token"} & keys)
+    has_v2 = any(key.endswith("_v2") for key in keys)
+    has_id = bool({"ltuid", "account_id"} & keys) or bool(
+        {"ltuid_v2", "account_id_v2"} & keys)
+
+    # 有账号 id + 任意一种令牌 = 够用（v1 更完整，优先报 app 形态）
+    missing = []
+    if not has_id:
+        missing.append({"keys": ["ltuid", "account_id"], "why": "账号 id（哪个号）"})
+    if not (has_v1 or has_v2):
+        missing.append({"keys": ["ltoken", "cookie_token"],
+                        "why": "长期令牌（养成计算器/战绩接口必须要）"})
+
+    mode = "app" if has_v1 else ("calculator" if has_v2 else "")
+    hint = ""
+    if missing:
+        names = "、".join("/".join(item["keys"]) for item in missing)
+        hint = (
+            f"这份 cookie 缺 {names}，需要登录的接口一定会被拒。\n"
+            "怎么补：① **从养成计算器网页复制**（推荐）—— 打开 "
+            "https://act.mihoyo.com/ys/event/calculator/index.html ，登录后 "
+            "F12 → Network → 找一条发往 api-takumi.mihoyo.com 的请求 → 右键 "
+            "「Copy as cURL」，把整段粘到 Studio 的「手动粘贴 cookie」（支持 cURL）；"
+            "② 或者用**扫码登录**换一份 v1 ltoken。"
+        )
+    elif mode == "calculator":
+        hint = ("这是**养成计算器网页**那套会话（v2）。能用来算材料；"
+                "如果某个接口说未登录，就再补一份 v1 ltoken（扫码登录）。")
+    return {"ok": not missing, "configured": True, "missing": missing,
+            "has_v2": has_v2, "has_v1": has_v1, "mode": mode, "hint": hint}
+
+
 def cookie_account_id(cookie=None):
     """从 cookie 里取 ltuid / account_id（米游社两套 id 都认，v2 优先）。"""
     text = str(cookie if cookie is not None else config.MYS_COOKIE or "")
@@ -143,6 +219,135 @@ def make_ds(query="", body="", salt=None, now=None, nonce=None):
     return f"{moment},{value},{md5(main.encode('utf-8')).hexdigest()}"
 
 
+# ==========================================
+# 🌟 米游社 App 那套（扫码登录拿 stoken → 换 ltoken 必须用它）
+# ==========================================
+#
+# 为什么单独一套：米游社把"App 接口"和"网页接口"分得很开。
+#   · 网页那套 salt（MYS_SALT）能给战绩/计算器接口用；
+#   · 但 `passport-api` 上的**游戏账号扫码登录**（createQRLogin / queryQRLoginStatus）
+#     必须用 **App 那套** salt + app_version，否则报"参数不合法"。
+# 这里的默认值取自社区实现（xiaoyao-cvs-plugin 的 model/mys/mysTool.js），
+# 米游社改版时改 .env 的 MYS_APP_SALT / MYS_APP_VERSION / MYS_APP_ID 即可。
+
+
+def pass_device_id(path=None):
+    """扫码登录那套要的 **32 位大写**设备号（社区实现是 `randomString(32).toUpperCase()`）。
+
+    为什么单独造一个、不直接用 `device_id()`：
+      · passport 的 `queryQRLoginStatus` 对设备号很挑 —— 用网页那套的小写 uuid
+        会被判成 `-3503 请求失败，当前设备或网络环境存在风险`（实测踩过）；
+      · 生成一次就存进快照复用：每次登录都换设备号反而更像机器人。
+    """
+    snapshot = load_snapshot(path) or {}
+    value = str(snapshot.get("pass_device_id") or "").strip()
+    if len(value) == 32:
+        return value
+    alphabet = string.ascii_uppercase + string.digits
+    value = "".join(secrets.choice(alphabet) for _ in range(32))
+    snapshot["pass_device_id"] = value
+    save_snapshot(snapshot, path)
+    return value
+
+
+def _pass_device_label(seed, length):
+    """从设备号推出一串稳定的 `[a-z0-9]` 标签（设备名 / 设备型号用）。
+
+    社区实现里这两个字段就是随机小写串（型号 16 位、名字 1~10 位），
+    并没有真实的机型语义 —— 这里做成"由设备号推导"，好处是同一次安装
+    每次跑都一致，方便复现和排查。
+    """
+    digest = md5(f"{seed}:{length}".encode("utf-8")).hexdigest()
+    return digest[:length]
+
+
+def app_headers(query="", body="", cookie=None, path=None, device=None):
+    """**passport（扫码登录）那套**请求头。
+
+    这几个值实测都不能少（少一个就 `-3005 参数不合法`）：
+      · `x-rpc-app_id` 是**字符串** `bll8iq97cem8`（不是数字）；
+      · `x-rpc-client_type` = `2`（Android）；
+      · `User-Agent` = `okhttp/4.8.0`；
+      · DS 用 `MYS_APP_SALT`（社区里叫 passSalt，**不是**网页那个 salt）。
+
+    另外三个头是**防 `-3503 设备或网络环境存在风险`**的：
+      · `x-rpc-device_id` 必须是 32 位大写（`pass_device_id()`）；
+      · `x-rpc-device_fp`（设备指纹）不能省；
+      · `x-rpc-device_model` / `x-rpc-device_name` 是随机小写串。
+    这一组取值与社区实现（xiaoyao-cvs-plugin `getHeaders(..., "pass")`）对齐。
+    """
+    resolved = device or pass_device_id(path)
+    headers = {
+        "x-rpc-device_id": resolved,
+        "x-rpc-device_name": _pass_device_label(resolved, 6),
+        "x-rpc-device_model": _pass_device_label(resolved, 16),
+        "x-rpc-device_fp": config.MYS_DEVICE_FP,
+        "x-rpc-app_id": config.MYS_APP_ID,
+        "x-rpc-app_version": config.MYS_APP_VERSION_APP,
+        "x-rpc-game_biz": "bbs_cn",
+        "x-rpc-sys_version": config.MYS_APP_SYS_VERSION,
+        "x-rpc-client_type": "2",
+        "x-rpc-channel": "appstore",
+        "x-rpc-sdk_version": "1.3.1.2",
+        "x-rpc-aigis": "",
+        "Content-Type": "application/json;",
+        "User-Agent": "okhttp/4.8.0",
+        "Accept-Encoding": "gzip, deflate, br",
+        "Connection": "Keep-Alive",
+    }
+    if cookie:
+        headers["Cookie"] = str(cookie)
+    return headers
+
+
+def app_ds(query="", body="", now=None, nonce=None):
+    """passport 那套 DS 签名（用 `MYS_APP_SALT`）。
+
+    算法与网页那套**完全相同**（`md5("salt=…&t=…&r=…&b=…&q=…")`），只是 salt 不同 ——
+    所以这里直接复用 `make_ds`，换的只是默认 salt。
+    """
+    return make_ds(query=query, body=body, salt=config.MYS_APP_SALT, now=now, nonce=nonce)
+
+
+def app_request(method, url, query="", body_obj=None, cookie=None, timeout=15, device=None):
+    """发一次 **passport（扫码登录）那套**请求并返回 `data`。
+
+    DS 放在**请求头**里（不是 query 参数）—— 这一点和网页那套相反，实测过。
+    """
+    if not cookie_configured() and cookie is None and "passport-api" not in str(url):
+        raise MysNotConfigured("未配置 MYS_COOKIE")
+    import httpx
+
+    body = json.dumps(body_obj, separators=(",", ":"), ensure_ascii=False) if body_obj is not None else ""
+    headers = app_headers(query, body, cookie=cookie, device=device)
+    headers["DS"] = app_ds(query, body)
+    target = f"{url}?{query}" if query else url
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            if body:
+                response = client.post(target, content=body.encode("utf-8"), headers=headers)
+            else:
+                response = client.get(target, headers=headers)
+    except Exception as exc:            # noqa: BLE001
+        raise MysTransportError(f"网络失败：{type(exc).__name__} {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise MysTransportError(
+            f"返回的不是 JSON（HTTP {response.status_code}）：{response.text[:120]!r}"
+        ) from exc
+    retcode = payload.get("retcode")
+    if retcode != 0:
+        message = str(payload.get("message") or "")
+        if retcode in _RETCODE_AUTH:
+            raise MysAuthError(_RETCODE_MESSAGES.get(retcode, message or "登录状态失效"))
+        if retcode in _RETCODE_RISK:
+            raise MysRiskControl(_RETCODE_MESSAGES.get(retcode, message or "触发风控"))
+        raise MysApiError(retcode, message or "未知错误")
+    return payload.get("data") or {}
+
+
 def device_id(path=None):
     """稳定的设备号：存在快照里复用。每次请求都换设备号更像机器人，更容易触发风控。"""
     snapshot = load_snapshot(path) or {}
@@ -174,7 +379,8 @@ def build_headers(url, query="", body="", cookie=None, path=None):
 # ==========================================
 
 
-def _request(method="GET", url="", query="", body_obj=None, cookie=None, timeout=15, path=None):
+def _request(method="GET", url="", query="", body_obj=None, cookie=None, timeout=15,
+             path=None, headers=None):
     """发一次米游社请求，返回 `data` 字段；失败抛 MysError 子类。"""
     if not cookie_configured() and cookie is None:
         raise MysNotConfigured("未配置 MYS_COOKIE")
@@ -182,7 +388,7 @@ def _request(method="GET", url="", query="", body_obj=None, cookie=None, timeout
     import httpx
 
     body = json.dumps(body_obj, ensure_ascii=False) if body_obj is not None else ""
-    headers = build_headers(url, query, body, cookie=cookie, path=path)
+    headers = headers or build_headers(url, query, body, cookie=cookie, path=path)
     target = f"{url}?{query}" if query else url
 
     try:
@@ -211,6 +417,70 @@ def _request(method="GET", url="", query="", body_obj=None, cookie=None, timeout
         raise MysApiError(retcode, message or "未知错误")
 
     return payload.get("data") or {}
+
+
+def web_request(method="POST", url="", body_obj=None, headers=None, timeout=15):
+    """给**网页版通行证**接口用的裸请求：返回 `(payload, 响应头)`。
+
+    **为什么要单独一条**：网页扫码登录拿到的令牌藏在 **`Set-Cookie` 响应头**里
+    （`ltoken_v2` / `ltuid_v2` / `cookie_token_v2` 那一套，也就是养成计算器要的会话），
+    而 `_request()` 只回 `data` 字段，响应头直接丢掉了 —— 拿不到就换不出 cookie。
+
+    这条通道**不签名、不带 cookie**（登录本身就是要换 cookie），所以不能拿它去打业务接口。
+    """
+    import httpx
+
+    body = json.dumps(body_obj, ensure_ascii=False) if body_obj is not None else ""
+    merged = {"Content-Type": "application/json", "User-Agent": _WEB_USER_AGENT}
+    merged.update(headers or {})
+    try:
+        with httpx.Client(timeout=timeout, follow_redirects=True) as client:
+            if str(method).upper() == "POST":
+                response = client.post(url, content=body.encode("utf-8"), headers=merged)
+            else:
+                response = client.get(url, headers=merged)
+    except Exception as exc:                # noqa: BLE001
+        raise MysTransportError(f"网络失败：{type(exc).__name__} {exc}") from exc
+
+    try:
+        payload = response.json()
+    except ValueError as exc:
+        raise MysTransportError(
+            f"返回的不是 JSON（HTTP {response.status_code}）：{response.text[:120]!r}"
+        ) from exc
+    return payload, response
+
+
+def cookies_from_response(response):
+    """把响应里的 `Set-Cookie` 抠成 `{键: 值}`。
+
+    httpx 的 `response.headers` 是**多值**的：`get_list("set-cookie")` 才能一条不落地拿到，
+    用 `response.headers.get("set-cookie")` 只会得到第一条 —— 而网页登录要的
+    `ltoken_v2` / `ltuid_v2` / `cookie_token_v2` 往往分散在好几条里（踩过这个坑）。
+    """
+    out = {}
+    try:
+        raw_list = response.headers.get_list("set-cookie")
+    except AttributeError:                  # 兼容其它 HTTP 客户端
+        raw_list = [response.headers.get("set-cookie", "")]
+    for raw in raw_list:
+        for chunk in str(raw or "").split(";"):
+            chunk = chunk.strip()
+            if "=" not in chunk:
+                continue
+            key, value = chunk.split("=", 1)
+            key, value = key.strip(), value.strip()
+            if not key or key.lower() in ("path", "expires", "domain", "max-age",
+                                          "samesite", "secure", "httponly"):
+                continue
+            if value:
+                out[key] = value
+    return out
+
+
+# 网页版请求用的 UA（米游社网页端；`x-rpc-client_type=4` 配合它才是扫码登录那套）
+_WEB_USER_AGENT = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
+                   "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
 
 
 def fetch_roles(uid=None, cookie=None, timeout=15, path=None):
@@ -745,13 +1015,40 @@ def _main(argv=None):
 
     parser = argparse.ArgumentParser(description="米游社个人战绩自检 / 手动刷新")
     parser.add_argument("--check", action="store_true", help="只验证 cookie 能不能用（1 次请求）")
+    parser.add_argument("--audit", action="store_true",
+                        help="只看 cookie 完不完整（含没含 ltoken），**不发任何请求**")
     parser.add_argument("--refresh", action="store_true", help="强制拉一次全角色名单")
     parser.add_argument("--show", metavar="角色名", help="打印某个角色的资料（会补天赋详情）")
     args = parser.parse_args(argv)
 
+    if args.audit:
+        audit = audit_cookie()
+        if not audit["configured"]:
+            print("❌ 没有配置 MYS_COOKIE（在 .env 或 Studio 的「配置 → 米游社」里填）")
+            return 1
+        if audit["ok"]:
+            print(f"✅ cookie 看起来完整（含 ltuid / ltoken）；掩码：{mask_cookie(config.MYS_COOKIE)}")
+            return 0
+        print("❌ cookie 不完整：")
+        for item in audit["missing"]:
+            print(f"   · 缺 {'/'.join(item['keys'])} —— {item['why']}")
+        print()
+        for line in audit["hint"].splitlines():
+            print(f"   {line}")
+        return 1
+
     if not cookie_configured():
         print("❌ 没有配置 MYS_COOKIE（在 .env 里填；拿法见 docs/MYS_COOKIE.md）")
         return 1
+
+    # 先白送一条"cookie 缺 ltoken"的提醒：不然 --check 过了、后面拉名单却一直报未登录，
+    # 玩家只会以为是风控。这是实测踩过、最难自己查出来的一种情况。
+    audit = audit_cookie()
+    if not audit["ok"]:
+        print("⚠️ cookie 不完整，需要登录的接口预计会失败：")
+        for line in audit["hint"].splitlines():
+            print(f"   {line}")
+        print()
 
     if args.check:
         try:

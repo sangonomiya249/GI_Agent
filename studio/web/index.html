@@ -24,6 +24,7 @@
       <button class="nav-item active" data-page="run"><span class="ico" data-icon="play"></span>运行 <em class="badge hidden" id="nav-badge-run">1</em></button>
       <button class="nav-item" data-page="dashboard"><span class="ico" data-icon="layout"></span>概览</button>
       <button class="nav-item" data-page="cooldown"><span class="ico" data-icon="leaf"></span>资源冷却</button>
+      <button class="nav-item" data-page="growth"><span class="ico" data-icon="spark"></span>角色养成</button>
       <button class="nav-item" data-page="routes"><span class="ico" data-icon="map"></span>任务与路线</button>
       <button class="nav-item" data-page="channels"><span class="ico" data-icon="plug"></span>远程通道</button>
       <div class="nav-label nav-label-secondary">系统</div>
@@ -176,6 +177,64 @@
         </div>
       </div>
 
+      <!-- ---------- 角色养成（米游社库存 + 养成计算器 + BetterGI） ---------- -->
+      <div class="page hidden" data-page="growth">
+        <div class="cards" id="growth-cards"></div>
+
+        <!-- 顶部：库存同步状态（数据是不是实时，必须一眼看出来） -->
+        <div class="card">
+          <div class="card-head">
+            <h2>米游社库存</h2>
+            <div class="row-actions tight">
+              <button class="btn primary sm" id="btn-growth-sync">刷新材料数据</button>
+              <button class="btn ghost sm" id="btn-growth-plan">重新计算缺口</button>
+              <button class="btn ghost sm" id="btn-growth-refresh">刷新页面数据</button>
+            </div>
+          </div>
+          <div id="growth-inventory" class="growth-inventory"></div>
+        </div>
+
+        <!-- 当前计划：今天该跑什么（状态与受阻原因放在**表格下面** —— 先看要做什么，再看为什么）
+             ⚠️ 布局顺序是玩家明确要求的：表格紧跟在标题下面，状态/受阻项在表格之后。 -->
+        <div class="card">
+          <div class="card-head">
+            <h2>当前养成计划</h2>
+            <div class="row-actions tight">
+              <label class="switch"><input type="checkbox" id="growth-hide-complete-tasks" /><span>不显示已达成材料</span></label>
+              <label class="switch"><input type="checkbox" id="growth-execute-test" /><span>只写配置（不启动）</span></label>
+              <button class="btn primary sm" id="btn-growth-execute">开始执行</button>
+            </div>
+          </div>
+          <div class="table-wrap"><table class="table" id="growth-tasks"></table></div>
+          <div class="muted" id="growth-plan-hint">读取中…</div>
+          <div id="growth-blockers" class="growth-blockers"></div>
+          <div class="hint" id="growth-plan-foot"></div>
+        </div>
+
+        <!-- 角色目标列表：拖拽排序 / 启用禁用 / 编辑目标 -->
+        <div class="card">
+          <div class="card-head">
+            <h2>角色养成目标</h2>
+            <div class="row-actions tight">
+              <select class="input sm" id="growth-sort-mode"></select>
+              <button class="btn ghost sm" id="btn-growth-bulk-edit">批量修改目标</button>
+              <button class="btn ghost sm" id="btn-growth-clear">清空目标</button>
+              <button class="btn ghost sm" id="btn-growth-add">添加角色</button>
+            </div>
+          </div>
+          <div class="muted" id="growth-target-hint">
+            拖动左侧的 ⠿ 可以调整顺序（拖动后自动切到「自定义」排序）。
+          </div>
+          <div class="table-wrap"><table class="table" id="growth-targets"></table></div>
+        </div>
+
+        <!-- 历史：同步成败 + 执行记录（"为什么材料一直不足"就查这里） -->
+        <div class="card">
+          <div class="card-head"><h2>同步与执行历史</h2><span class="muted" id="growth-history-hint"></span></div>
+          <div id="growth-history"></div>
+        </div>
+      </div>
+
       <!-- ---------- 任务与路线 ---------- -->
       <div class="page hidden" data-page="routes">
         <div class="cards" id="route-cards"></div>
@@ -231,17 +290,47 @@
           <div class="card-head">
             <h2>米游社个人战绩（可选）</h2>
             <div class="row-actions tight">
+              <button class="btn primary sm" id="btn-mys-scan">扫码登录（推荐）</button>
+              <button class="btn sm" id="btn-mys-scan-web">网页版扫码（养成计算器）</button>
               <button class="btn ghost sm" id="btn-mys-check">验证 Cookie</button>
               <button class="btn ghost sm" id="btn-mys-refresh">拉一次全角色名单</button>
             </div>
           </div>
           <div class="muted" id="mys-status">读取中…</div>
+
+          <!-- 扫码登录：二维码直接在页面里画出来，手机扫码 → 自动换 ltoken 写进 .env -->
+          <div id="mys-scan-panel" class="scan-panel hidden">
+            <div class="scan-head">
+              <b>扫码登录</b>
+              <span class="muted" id="mys-scan-hint">用手机「米游社」App 扫下面的二维码</span>
+            </div>
+            <div class="scan-body">
+              <div id="mys-scan-qr" class="scan-qr"></div>
+              <ol class="scan-steps">
+                <li>打开手机「米游社」App → 右上角「+」→「扫一扫」；</li>
+                <li>扫左边这张二维码，再在手机上点「确认登录」；</li>
+                <li>这边会自动换取 <code>ltoken</code>、验证并写入 <code>.env</code>，不用再点别的。</li>
+              </ol>
+            </div>
+            <div id="mys-scan-progress" class="scan-progress"></div>
+            <div class="row-actions tight">
+              <button class="btn ghost sm" id="btn-mys-scan-refresh">换一张二维码</button>
+              <button class="btn ghost sm" id="btn-mys-scan-cancel">取消</button>
+              <button class="btn ghost sm" id="btn-mys-scan-manual">读不出 cookie？手动粘贴</button>
+            </div>
+          </div>
+
           <div id="mys-result"></div>
           <div class="hint">
-            「配置」页里有 <code>MYS_COOKIE</code> 的输入框（在「米游社个人战绩（可选）」这一组里，字段类型是密码框）。
-            填完先点上面的<b>验证 Cookie</b>（只会发 1 次请求，读你的角色列表），成功再点<b>保存</b>。
-            验证直接用输入框里的当前内容，<b>不需要先保存</b>。<br />
-            ⚠️ Cookie 是账号级凭据：只写进本机 <code>.env</code>，接口只回掩码；拿法与排错见 <code>docs/MYS_COOKIE.md</code>。
+            <b>推荐直接点「扫码登录」</b>：二维码会画在页面里（不用装任何东西，也不用开浏览器窗口），
+            你扫码确认后程序直接向米游社换取 <b>v1 <code>ltoken</code></b> 并写进 <code>.env</code>。
+            这样拿到的 cookie 里<b>一定带 <code>ltoken</code></b> —— 而养成计算器和战绩接口都需要它。<br />
+            也可以自己填 <code>MYS_COOKIE</code>（「配置」页里那一组，字段是密码框），
+            填完先点<b>验证 Cookie</b>（只发 1 次请求，读你的角色列表），成功再点<b>保存</b>；验证直接用输入框里的当前内容，不需要先保存。<br />
+            ⚠️ 只有 <code>*_v2</code> 那一套（<code>ltoken_v2</code> 等）的 cookie <b>不够用</b>：
+            它能通过"列出角色"这一关，但拉起角色/算材料会一直报未登录。
+            缺什么、怎么补，见 <code>docs/MYS_COOKIE.md</code>；也可以跑 <code>python -m skills.mys_api --audit</code> 自查。<br />
+            ⚠️ Cookie 是账号级凭据：只写进本机 <code>.env</code>，接口只回掩码。
           </div>
         </div>
       </div>

@@ -277,6 +277,22 @@ code { font-family: var(--mono); background: var(--panel-2); padding: 1px 5px; b
 .table th, .table td { padding: 9px 12px; text-align: left; border-bottom: 1px solid var(--border); white-space: nowrap; }
 .table th { position: sticky; top: 0; background: var(--panel-2); color: var(--text-dim); font-weight: 600; font-size: 12px; z-index: 1; }
 .table tr:hover td { background: var(--panel-2); }
+/* 数字列右对齐 + 等宽数字：不然 3,182,500 / 647,990 这种一长一短既对不齐、也看不出关系 */
+.table th.num, .table td.num { text-align: right; font-variant-numeric: tabular-nums; }
+/* 表格上方的一行解释（"消耗"和"所需"到底啥区别，必须写在看得见的地方） */
+.growth-table-note {
+  caption-side: top;
+  text-align: left;
+  padding: 8px 12px;
+  font-size: 12px;
+  line-height: 1.4;
+  white-space: nowrap;
+}
+/* 「已有」材料的小胶囊（米游社只给部分材料，所以是一排零散的小块） */
+.growth-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0 4px; }
+.growth-chip { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px;
+  border: 1px solid var(--border); background: var(--panel-2); }
+.growth-chip b { color: var(--ok); margin-left: 4px; }
 .tag { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 11.5px; border: 1px solid var(--border); }
 .tag.ok { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); background: color-mix(in srgb, var(--ok) 12%, transparent); }
 .tag.warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); background: color-mix(in srgb, var(--warn) 12%, transparent); }
@@ -896,3 +912,100 @@ kbd {
 .cooldown-tabs .chip .tag { margin-left: 4px; padding: 1px 7px; font-size: 11px; }
 #cooldown-foot { line-height: 1.7; }
 
+/* ---------------- 角色养成页 ---------------- */
+/* 库存卡：状态行 + 本次同步的变化（涨了绿、少了红） */
+.growth-inventory { display: flex; flex-direction: column; gap: 8px; }
+.growth-line {
+  font-size: 12.5px; line-height: 1.75; color: var(--text-dim);
+  padding: 8px 10px; border-radius: var(--radius-sm);
+  background: var(--panel-2); border: 1px solid var(--border);
+  word-break: break-word;
+}
+.growth-line b { color: var(--text); }
+.growth-line.ok { border-color: color-mix(in srgb, var(--ok) 35%, var(--border)); }
+.growth-line.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--border)); }
+.growth-line.bad { border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+.growth-delta {
+  display: inline-block; margin: 2px 10px 2px 0; padding: 1px 7px;
+  border-radius: 999px; border: 1px solid var(--border); font-size: 11.5px;
+}
+.growth-delta.up { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--border)); }
+.growth-delta.down { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, var(--border)); }
+
+/* 受阻原因：橙色提示条，排在任务表上面 */
+.growth-blockers { display: flex; flex-direction: column; gap: 6px; margin: 10px 0; }
+.growth-blockers:empty { display: none; }
+
+/* 角色目标表：拖拽手柄 + 操作列 */
+.drag-col { width: 82px; }
+.drag-handle { cursor: grab; color: var(--text-faint); user-select: none; }
+.drag-handle:active { cursor: grabbing; }
+.growth-order-input {
+  width: 46px;
+  min-width: 46px;
+  margin-left: 8px;
+  padding-left: 6px;
+  padding-right: 4px;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+.ops-col { width: 220px; white-space: normal; }
+.ops-col .btn { margin: 2px 2px 2px 0; }
+#growth-targets tr[draggable="true"]:active { opacity: .65; }
+#growth-targets td, #growth-tasks td { vertical-align: middle; }
+#growth-targets .muted, #growth-tasks .muted { font-size: 11.5px; }
+
+/* 编辑弹窗里的表单 */
+.growth-form { display: flex; flex-direction: column; gap: 12px; }
+.growth-form label { display: flex; flex-direction: column; gap: 5px; font-size: 12.5px; color: var(--text-dim); }
+.growth-form label.switch { flex-direction: row; align-items: center; gap: 8px; }
+.growth-form select {
+  background: var(--panel-2); border: 1px solid var(--border); color: var(--text);
+  border-radius: var(--radius-sm); padding: 6px 9px; font-size: 13px;
+}
+.growth-form-row { display: flex; flex-wrap: wrap; gap: 12px; }
+.growth-form-row label { flex: 1 1 120px; }
+
+/* "添加角色"弹窗：一屏列出账号里的角色，点一下就加 */
+.growth-pick { display: block; width: 100%; text-align: left; margin-bottom: 6px; }
+.growth-pick-main,
+.growth-pick-sub { display: block; line-height: 1.45; }
+.growth-pick-sub { margin-top: 3px; color: var(--text-dim); font-size: 12px; }
+/* 「添加角色」的候选列表：118 个角色，得能滚，不能把弹窗撑爆 */
+.growth-picks { max-height: 46vh; overflow: auto; padding-right: 4px; }
+
+/* ---------------- 米游社扫码登录面板 ---------------- */
+.scan-panel {
+  margin: 12px 0;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, var(--border));
+  border-radius: var(--radius-sm);
+  background: var(--panel-2);
+}
+.scan-panel.hidden { display: none; }
+.scan-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 8px; }
+.scan-head .muted { font-size: 12px; }
+/* 二维码 + 步骤并排：窄屏时自动上下堆叠 */
+.scan-body { display: flex; gap: 16px; align-items: flex-start; flex-wrap: wrap; margin-bottom: 10px; }
+.scan-qr {
+  flex: 0 0 auto;
+  width: 208px;
+  height: 208px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #fff;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+/* 二维码必须是纯黑白、不能有圆角缩放模糊，否则手机扫不出来 */
+.scan-qr svg { width: 100%; height: 100%; display: block; image-rendering: pixelated; }
+.scan-qr:empty { display: none; }
+.scan-steps { margin: 0 0 10px; padding-left: 20px; font-size: 12.5px; color: var(--text-dim); line-height: 1.9; }
+.scan-body .scan-steps { flex: 1 1 260px; margin: 0; }
+.scan-steps code { font-size: 12px; }
+.scan-progress { font-size: 12.5px; margin-bottom: 10px; }
+.scan-progress .doctor-row { margin-bottom: 4px; }
+#f-mys-manual-cookie { width: 100%; font-family: inherit; font-size: 12.5px; resize: vertical; }
+.bad { color: var(--danger); }

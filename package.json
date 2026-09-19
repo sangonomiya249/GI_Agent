@@ -1,0 +1,16 @@
+{
+	"name": "gi-agent-tools",
+	"version": "1.0.0",
+	"private": true,
+	"description": "GI_Agent 的 Node 侧辅助工具（只用于把 genshin-db 的数据导出成 JSON；GI_Agent 本体是纯 Python）",
+	"scripts": {
+		"export:genshin-db": "node scripts/export_genshin_db.js",
+		"knowledge": "node scripts/export_genshin_db.js && python scripts/build_material_families.py"
+	},
+	"devDependencies": {
+		"genshin-db": "^5.2.7"
+	},
+	"engines": {
+		"node": ">=18"
+	}
+}

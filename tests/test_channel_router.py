@@ -6,16 +6,28 @@ target 带前缀（`qq:`）时改由对应通道投递，飞书目标（没有�
 
 import contextlib
 import io
+import os
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from api import channel_router, feishu_api
+import config
+from api import channel_router, feishu_api, notice_queue
 
 
 class ChannelRouterTests(unittest.TestCase):
     def setUp(self):
         channel_router.clear()
         self.sent = []
+        # 跨进程推送队列会落到 `config.HISTORY_FILE` 旁边 —— 指到临时目录，
+        # 别写进玩家真实的 memory/（也保证用例之间互不影响）
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        patcher = patch.object(config, "HISTORY_FILE",
+                               os.path.join(self.tmp.name, "chat_context.json"))
+        patcher.start()
+        self.addCleanup(patcher.stop)
+        notice_queue.clear()
 
     def tearDown(self):
         channel_router.clear()
@@ -67,8 +79,14 @@ class ChannelRouterTests(unittest.TestCase):
         channel_router.register_sender("qq:", self._sender("qq"))
         channel_router.unregister_sender("qq:")
         self.assertEqual(channel_router.registered_prefixes(), ())
-        # 注销后目标回到飞书（try_send 返回 False）
-        self.assertFalse(channel_router.try_send("qq:group:a", "x"))
+        # ★ 注销之后**不再返回 False**：QQ 的发送器只注册在机器人进程里，
+        #   本进程（CLI / Studio）拿 `qq:...` 返回 False 会让调用方拿它当飞书 id 去发，
+        #   结果消息凭空消失（玩家反馈过"启动推送收不到"）。
+        #   现在改成塞进跨进程队列（`api/notice_queue.py`），由机器人取走发送。
+        ok = channel_router.try_send("qq:group:a", "x")
+        self.assertTrue(ok)
+        queued = [item["text"] for item in notice_queue.peek()]
+        self.assertIn("x", queued)
 
     def test_register_rejects_bad_arguments(self):
         with self.assertRaises(ValueError):

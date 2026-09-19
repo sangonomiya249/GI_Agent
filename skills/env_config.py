@@ -240,6 +240,72 @@ FIELD_GROUPS = (
                   "和上面的 salt 配套；留空 = 默认 2.40.1。"),
         ),
     ),
+    FieldGroup(
+        "角色养成（养成计算器）",
+        (
+            Field("GROWTH_STARTUP_SYNC", "启动时自动同步库存", "bool", (), "1",
+                  "打开 Studio / 启动 Agent 时自动向米游社同步一次背包（规格书默认行为）。\n"
+                  "关掉也不会丢数据：养成页上那个「同步米游社库存」按钮随时能手动同步。"),
+            Field("GROWTH_SYNC_MODE", "自动同步频率", "choice",
+                  ("startup", "30", "120", "manual"), "startup",
+                  "startup=每次启动（默认） / 30=每 30 分钟 / 120=每 2 小时 / manual=只手动。\n"
+                  "⚠️ 米游社接口有风控：没必要别设太勤（30 分钟已经算频繁）。"),
+            Field("GROWTH_POST_TASK_SYNC", "任务完成后重新同步", "bool", (), "1",
+                  "BetterGI 养成任务跑完自动重新拉一次米游社库存、重算缺口。\n"
+                  "**这是整个系统的核心机制**（规格书 §19）：BetterGI 永远不知道它捡到了多少，\n"
+                  "所以库存只能靠「下一次同步」来更新。除非你在手动核对数据，否则不要关。"),
+            Field("GROWTH_INVENTORY_STALE_HOURS", "库存过期时间（小时）", "int", (), "12",
+                  "超过这个时间没同步，养成页会标注「这不是实时数据」并提示先同步。\n"
+                  "材料缺口是按库存算的，拿一份两天前的库存做规划等于白跑。"),
+            Field("GROWTH_COMPUTE_MAX_PER_PLAN", "一次规划最多算几个角色", "int", (), "8",
+                  "每个角色要问米游社养成计算器 1 次（拿材料需求）。角色多的时候调小可以降低风控风险，\n"
+                  "代价是一次规划少算几个角色（其余角色下一轮再算）。"),
+            Field("GROWTH_COMPUTE_CACHE_MINUTES", "材料需求缓存（分钟）", "int", (), "30",
+                  "同一个角色、同一份目标的材料需求结果缓存这么久，避免反复点「重新规划」时\n"
+                  "一遍遍请求米游社。库存同步 / 目标变更会立刻让缓存失效。"),
+            Field("GROWTH_EXECUTION_MODE", "执行方式", "choice",
+                  ("all", "stepwise"), "all",
+                  "all＝一次性全部执行（默认）：按原本调度把这一轮的体力任务 + 自由任务一起下发。\n"
+                  "stepwise＝分批次：先推总路线详情，然后只问第一条「跑不跑」，回 y 就跑这条，\n"
+                  "跑完自动推下一条；回别的内容就放弃队列、按你说的来。\n"
+                  "两种方式都会**跳过没有路线的材料**（它们照样显示在明细表里）。"),
+            Field("GROWTH_DATA_SOURCE", "养成数据源", "choice",
+                  ("showcase", "calculator"), "showcase",
+                  "showcase＝角色展柜（Enka，默认）：和聊天里那套上下文完全一致，\n"
+                  "但展柜一次只放 8 个角色，且它**不会主动推送**。\n"
+                  "calculator＝米游社养成计算器：按你设的养成目标算材料缺口，\n"
+                  "选它时会把当前养成计划推送给玩家（含预计培养天数）。"),
+            Field("GROWTH_STARTUP_PUSH", "启动时推送执行目标", "bool", (), "1",
+                  "每次启动 Agent 都把「今天要执行的目标」推送给玩家。\n"
+                  "**建议保持开启**：米游社那边的已有/还差是算出来的，BetterGI 跑完那一刻\n"
+                  "背包还没刷新，所以今天的执行目标只能靠推送告诉你。"),
+            Field("GENSHIN_DB_PATH", "genshin-db 包目录（可选）", "text", (), "",
+                  "genshin-db 是个 **Node 包**，只用来重算「材料族知识表」（秘境开放星期、\n"
+                  "怪物掉落、合成配方链），**跑 Agent 本身不需要它**。\n"
+                  "① 在项目根目录 `npm install` → 这里留空即可（会自动找到 node_modules/genshin-db）；\n"
+                  "② 装在别处 → 填包目录，例如 D:\\tools\\node_modules\\genshin-db。\n"
+                  "装好之后在项目根目录跑 `npm run knowledge`（导出 + 重建知识表）。"),
+            Field("MYS_CALC_HOST", "养成计算器域名（高级）", "text", (), "",
+                  "留空 = https://api-takumi.mihoyo.com（国服）。\n"
+                  "⚠️ 是 api-takumi.mihoyo.com，不是 api-takumi-static.mihoyo.com ——"
+                  "后者是静态资源域，打上去只会得到 404。"),
+            Field("MYS_CALC_PREFIX", "接口路径前缀（高级）", "text", (), "",
+                  "留空 = /event/e20200928calculate（米游社养成计算器自己的活动命名空间）。"),
+            Field("MYS_CALC_PATH_AVATAR_LIST", "角色图鉴路径（高级）", "text", (), "",
+                  "留空 = /v1/avatar/list。\n"
+                  "改版后如果同步报 404，跑 `python -m skills.mys_calculator --probe`"
+                  "让它用你的 cookie 试出正确路径，填到这里即可（不用改代码）。"),
+            Field("MYS_CALC_PATH_COMPUTE", "材料计算路径（高级）", "text", (), "",
+                  "留空 = /v2/compute（响应分 avatar_consume / avatar_skill_consume / weapon_consume 三桶）。"),
+            Field("MYS_CALC_PATH_MY_ITEMS", "账号角色路径（高级）", "text", (), "",
+                  "留空 = /v1/sync/avatar/list（账号里拥有的角色与真实等级，**需要登录**）。"),
+            Field("MYS_LOGIN_PROFILE_DIR", "扫码登录的浏览器目录（高级）", "path", (), "",
+                  "留空 = <项目>\\.studio-profile\\mys-login。\n"
+                  "扫码登录会用一个**独立**的浏览器配置目录（不是你日常浏览器的 profile），"
+                  "登录状态就落在这里，读 cookie 也从这里读。\n"
+                  "想「退出登录」直接把这个目录删掉即可。"),
+        ),
+    ),
 )
 
 # Keep the provider controls aligned with the current OpenAI-compatible setup.

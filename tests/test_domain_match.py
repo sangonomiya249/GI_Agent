@@ -459,16 +459,19 @@ class DomainResinWriteTests(unittest.TestCase):
             bgi_controller.execute_bgi_task(energy_task, "t", {}, "open_id", "100000000")
 
     def test_one_run_writes_resin_limit_and_domain(self):
-        self._run(
-            {
-                "energy_task": {
-                    "action": "run_domain",
-                    "target": "蓝砚",
-                    "count": 1,
-                    "domain_index": "2",
+        # ⚠️ 结果取决于玩家 .env 里的 `DOMAIN_RESIN_PREFERENCE`（20 / 40 / 浓缩）——
+        #    测试必须自己固定成 20，否则玩家的设置一变这条就崩（踩过）。
+        with patch.object(config, "DOMAIN_RESIN_PREFERENCE", "原粹树脂20"):
+            self._run(
+                {
+                    "energy_task": {
+                        "action": "run_domain",
+                        "target": "蓝砚",
+                        "count": 1,
+                        "domain_index": "2",
+                    }
                 }
-            }
-        )
+            )
 
         written = json.loads(self.one_dragon.read_text(encoding="utf-8"))
         self.assertEqual(written["DomainName"], "塞西莉亚苗圃")

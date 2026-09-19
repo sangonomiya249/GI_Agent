@@ -713,6 +713,54 @@ class QQBotClient:
     def _pending_path(self) -> str:
         return os.path.join(PROJECT_ROOT, "memory", PENDING_FILE_NAME)
 
+    # ---------------- 跨进程推送队列（别的进程排进来的通知） ----------------
+
+    PUSH_DRAIN_INTERVAL = 15.0
+
+    def _start_push_drain(self) -> None:
+        """起一个后台线程，定期把 `memory/agent_push_queue.json` 里的推送发出去。"""
+        if getattr(self, "_push_thread", None):
+            return
+        self._push_stop = threading.Event()
+        self._push_thread = threading.Thread(
+            target=self._push_drain_loop, name="qq-push-drain", daemon=True)
+        self._push_thread.start()
+
+    def _push_drain_loop(self) -> None:
+        """定期取走队列里的推送并发送；发不出去就退回自己的补发队列（玩家下次说话时补）。"""
+        while not getattr(self, "_push_stop", None) or not self._push_stop.is_set():
+            try:
+                self.drain_external_pushes()
+            except Exception as exc:        # noqa: BLE001 —— 后台线程不能因为一条消息死掉
+                print(f"⚠️ 取外部推送失败（{type(exc).__name__}: {exc}）")
+            time.sleep(self.PUSH_DRAIN_INTERVAL)
+
+    def drain_external_pushes(self, limit=5) -> int:
+        """取走并发送跨进程推送，返回成功发出的条数。"""
+        from api import notice_queue
+
+        items = notice_queue.drain(limit=limit)
+        if not items:
+            return 0
+        sent = 0
+        for target, text in items:
+            if self.config.replies_disabled:
+                # 单向模式：不发到 QQ，但内容一定要留痕（否则这条推送就消失了）
+                channel_router.echo_locally("QQ（单向模式）", text)
+                sent += 1
+                continue
+            try:
+                if self.send_threadsafe(target, text):
+                    sent += 1
+                    print(f"📤 已把跨进程推送发给 {target}")
+                else:
+                    # 主动消息也没发出去（平台没给额度）→ 交给原来的补发队列
+                    self.queue_notice(parse_target(target), text)
+            except Exception as exc:        # noqa: BLE001
+                print(f"⚠️ 发送跨进程推送失败（{target}）：{exc}")
+                self.queue_notice(parse_target(target), text)
+        return sent
+
     def _save_pending(self) -> None:
         """把待补发队列落盘（**原子写** + 加锁）。
 
@@ -1220,6 +1268,13 @@ class QQBotClient:
             print("   （审批屏会挂按钮：✅ 执行 / 🧪 仅改配置 / 🚫 取消；平台没开通按钮权限时会自动退回纯文本）")
         if not self.config.replies_disabled:
             await self.ensure_menu()      # 单聊自定义菜单：不需要内邀，属于按钮的替代方案
+
+        # ★ 把别的进程（CLI / Studio / 完成监视）排进来的推送取走发掉。
+        #   为什么要有这个循环：QQ 的发送能力只在这个进程里（要 client 与凭据），
+        #   别的进程直接 `send_feishu_msg("qq:...")` 会**静默失败**——玩家反馈过
+        #   "启动推送收不到 / 展柜思考完 QQ 收不到"。那边现在会写进
+        #   `memory/agent_push_queue.json`，这里定期取走。
+        self._start_push_drain()
 
         while True:
             try:

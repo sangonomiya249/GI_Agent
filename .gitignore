@@ -21,6 +21,11 @@ venv/
 env/
 gi_env/
 
+# Node（只用来跑 genshin-db 那个导出脚本；包本体几百 MB，绝不能提交）
+node_modules/
+npm-debug.log*
+yarn-error.log*
+
 # Testing / coverage
 .pytest_cache/
 .coverage
@@ -64,12 +69,31 @@ memory/chat_context.json
 memory/agent_registered_tasks.json
 memory/qq_pending_notices.json
 memory/qq_bot.lock
+# 跨进程推送队列（别的进程写给 QQ 机器人取走的通知）：里面带**会话标识**
+# （`qq:c2c:<你的 openid>#msg`），跟 qq_pending_notices.json 一样不能提交
+memory/agent_push_queue.json
+memory/agent_push_queue.json.lock
 memory/mys_characters.json
 memory/gather_cooldown_manual.json
 memory/update_check.json
 memory/current_state.json
 memory/target_config.json
+# 角色养成：库存快照里全是**你账号的真实材料数量**，养成本身也带着角色与 UID —— 同样不能提交
+# ⚠️ 用 `growth.db*` 通配：只写 `growth.db` 挡不住**备份文件** ——
+#    「清空目标」会先复制一份 `growth.db.bak-clear-targets-<时间戳>`，
+#    手动备份也叫 `growth.db.bak-<时间戳>`，它们**装的是同一份私人数据**
+#    （培养目标 + 算出来的材料缺口）。实测差点把这些 3 MB 的备份推上 GitHub。
+memory/growth.db*
+memory/mys/
 
 # BetterGI 关闭流程的临时状态（scripts/stop_bettergi.ps1 使用）
 scripts/*.pids
 scripts/*.log
+
+# 改文件前手动留的安全副本（`xxx.py.bak-20260919-211139`、`xxx.bak-时间戳`）——
+# 那些是本机的临时保险，不是源码；它们还会让仓库里出现两份同名文件，
+# 容易让人改错文件。要留就留在本地，别提交。
+*.bak
+*.bak-*
+memory/*.json.bak*
+!*.bak.example

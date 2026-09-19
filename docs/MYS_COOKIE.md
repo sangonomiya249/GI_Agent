@@ -24,23 +24,140 @@
 
 ---
 
-## 2. 怎么拿 cookie（三分钟）
+## 2. 怎么拿 cookie
 
-米游社的 cookie 就是浏览器里那一串。要点是**用已经登录的米游社网页**去复制：
+### 推荐：用 Studio 的「扫码登录」
+
+Studio → 左边 **「配置」** → 找 **「米游社个人战绩（可选）」** 那张卡 → 点 **「扫码登录（推荐）」**：
+
+```text
+点「扫码登录」
+    ↓  二维码**直接画在页面上**（不用装东西、也不会弹浏览器窗口）
+手机「米游社 App」→ 右上角「+」→ 扫一扫 → 扫页面上的二维码
+    ↓  手机上点「确认登录」
+程序自动：换 v1 ltoken → 验证（真的能用才收）→ 写进 .env
+```
+
+二维码**只活两分钟左右**，所以面板上有倒计时；过期了会自动换一张，你重新扫就行。
+
+命令行等价：
+
+```bash
+python -m skills.mys_login --qr      # 终端里画出二维码，手机扫（第一张过期会自动再出）
+python -m skills.mys_login           # 只看当前状态（cookie 全不全、缺什么）
+python -m skills.mys_login --status  # 同上
+```
+
+#### 它为什么能拿到 `ltoken`（而别的方法拿不到）
+
+它不是"读浏览器的 cookie"，而是**直接走米游社自己的登录接口**：
+
+```text
+createQRLogin（passport-api）        → 一张二维码（URL + ticket）
+    ↓  玩家扫码并在手机上确认
+queryQRLoginStatus 轮询到 Confirmed  → 拿到 stoken + aid/mid
+    ↓
+getLTokenBySToken                    → **v1 ltoken**（计算器/战绩唯一认的那个）
+    ↓
+verifyLtoken 验证真能用               → 才写进 .env
+```
+
+所以**全程不碰浏览器、不碰 cookie 库、不涉及任何解密** ——
+之前那套"开独立窗口读 cookie"踩过的坑（App-Bound 加密、库被占用、新版 Edge 拒绝调试协议）
+统统绕开了。
+
+> 两个必须对齐的细节（都是实测踩出来的，改代码时别动）：
+> * `x-rpc-device_id` 必须是 **32 位大写**、且建码与轮询**用同一个**，否则
+>   `-3503 请求失败，当前设备或网络环境存在风险`；
+> * `x-rpc-device_fp`（设备指纹）**不能省**，少了它同样 `-3503`。
+
+#### 兜底：手动复制（自动路径全都不可用时）
+
+老路子（打开网页登录窗口 → 自己从开发者工具抄 cookie）仍然保留，但它现在**拿不到 v1
+`ltoken`** —— 米游社网页登录只发 `*_v2` 那一套（见下面第 4 条）。所以只在你确实不想扫码时用：
+
+```bash
+python -m skills.mys_login --devtools   # 打开登录窗口 + 开发者工具
+```
+
+1. 用米游社 App 扫码登录；
+2. 开发者工具里点 **Application**（应用程序）→ 左侧 **Cookies** → 选 `https://user.mihoyo.com`；
+3. 抄下 **`ltuid`**、**`ltoken`**、**`cookie_token`** 三行的 Value
+   （`ltoken` 比较长，双击单元格再 Ctrl+C）；
+4. 拼成一行：`ltuid=...; ltoken=...; cookie_token=...`；
+5. 粘到 Studio 那个卡上的 **「读不出 cookie？手动粘贴」**（会先验证再保存），
+   或者直接写进 `.env` 的 `MYS_COOKIE`。
+
+想看"浏览器那条路到底能不能用"，跑：
+
+```bash
+python -m skills.mys_login --diagnose
+```
+
+它会列出 ① CDP 能不能读到、② cookie 库解密能不能读出、③ **库里到底有哪些 cookie 名**
+（不解密，只看名字 —— 这一栏最有信息量：能看到 `ltoken` 就说明"cookie 在、只是读不出明文"）。
+
+> 为什么不做"内嵌网页自动抓 cookie"：内嵌页面拿不到 httpOnly 的 cookie
+> （`ltoken` 恰好就是 httpOnly），所以那条路技术上不通。
+
+#### 其他要知道的点
+
+* 它**不碰你的密码**：不接收、不保存、不发送任何账号密码；
+* 扫码登录时凭据只在你手机和米游社之间，我们拿到的只是 `stoken` 换出来的 token；
+* 用过的 ticket 会立刻丢掉，不会被重复使用；
+* 手动粘贴的 cookie 会先经 `verifyLtoken` 验证**再**写 `.env`，验证不过不会保存。
+
+> 为什么不用"网页 cookie 直接换 token"：试过了，换不了。
+> `ltoken_v2` 补成 v1 键名、放进 `x-rpc-ltoken` 头、
+> 走 `getActionTicketByCookieToken` / `getWebTokensByAuthKey` —— 全部不行。
+> `ltoken` 只在**真正的登录流程**里发放，所以这里只能老老实实登一次。
+
+### 备选：手工复制（三分钟）
+
+米游社的 cookie 就是浏览器里那一串。要点是**用已经登录的米游社网页**去复制，
+而且要**从发往 `api-takumi.mihoyo.com` 的请求上复制** —— 见下面第 4 条的原因：
 
 1. 浏览器打开 <https://www.mihoyo.com/>，扫码登录米游社账号（**不要用无痕窗口**，无痕关掉就没了）；
 2. 按 `F12` 打开开发者工具，切到 **网络 / Network** 面板，勾选 **保留日志 / Preserve log**；
-3. 刷新一下页面，在请求列表里随便点一个发往 `mihoyo.com` 的请求（例如 `api-takumi.mihoyo.com`）；
-4. 在 **请求标头 / Request Headers** 里找到 **`Cookie`** 那一行，**整行复制**（右键 → 复制值）；
-5. 粘到下面第 3 节说的地方（Studio 配置页，或者 `.env`）。
+3. **先随便打开一次「个人战绩」页**（<https://webstatic.mihoyo.com/app/community-game-records/>，
+   选原神 → 我的角色）。这一步会让浏览器拿到 `ltoken` 并开始带上它；
+4. 回到 Network 面板，在请求列表里找**域名是 `api-takumi.mihoyo.com`（或
+   `api-takumi-record.mihoyo.com`）** 的那条请求（点它 → 看 Request Headers）；
+5. 在 **请求标头 / Request Headers** 里找到 **`Cookie`** 那一行，**整行复制**（右键 → 复制值）；
+6. 粘到下面第 3 节说的地方（Studio 配置页，或者 `.env`）。
 
 **必须包含的键**（缺了就读不到）：
 
 | 键 | 作用 | 缺了会怎样 |
 | --- | --- | --- |
 | `ltuid` 或 `account_id` | 账号 id | 报"未登录" |
-| `ltoken` | 长期令牌（**战绩接口必须要**） | `--check` 可能过，但拉角色列表报风控/未登录 |
+| `ltoken` | 长期令牌（**战绩接口与养成计算器必须要**） | 能列出角色，但拉角色/算材料全部失败 |
 | `cookie_token` | 网页令牌（部分接口要） | 少数接口失败，建议一起带上 |
+
+> ⚠️ **实测踩过的大坑：v2 cookie**。
+> 现在的米游社网页登录只给你发 **`*_v2`** 那一套
+> （`ltoken_v2` / `account_id_v2` / `ltuid_v2` / `cookie_token_v2`）。
+> 它**能**通过"列出你名下角色"这种公共接口，所以看起来一切正常；
+> 但**需要登录的接口会全部失败**：
+>
+> | 接口 | 只有 v2 时的结果 |
+> | --- | --- |
+> | `binding/api/getUserGameRolesByCookie`（公共） | ✅ `retcode 0`，能列出角色 |
+> | 养成计算器 `/v1/sync/avatar/list` | ❌ `retcode -100`「请先登录后参与活动」 |
+> | 养成计算器 `/v2/compute`（算材料） | ❌ `retcode 0` 但**材料清单是空的** |
+> | 战绩 `character/list` | ❌ `retcode 5003` |
+>
+> **`ltoken_v2` 不能当 `ltoken` 用**（试过补成 v1 键名、放进 `x-rpc-ltoken` 头，都不行）。
+> 要拿到 `ltoken`，**最省事就是上面的扫码登录**；手工路子则必须先打开一次「个人战绩」页，
+> 再从 `api-takumi.mihoyo.com` 的请求上复制。
+>
+> 不确定自己的 cookie 行不行？跑这个，它会直接告诉你缺什么：
+>
+> ```bash
+> python -m skills.mys_api --audit
+> ```
+>
+> （`python main.py doctor` 也会把这一条以红色报出来；Studio 配置页的状态行同样会标红。）
 
 > 手机 App 抓包也能拿到同一份 cookie，但更麻烦；浏览器这条路最省事。
 > 复制时**别只复制一半**（比如只复制了 `ltuid`），那会一直在"未登录"和"风控"之间来回。
@@ -127,10 +244,13 @@ Agent：（读到米游社数据）胡桃 Lv.80，天赋 8/8/8，突破 Boss 材
 
 | 现象 | 含义 | 怎么办 |
 | --- | --- | --- |
-| `未登录或 cookie 已失效`（retcode -100/-111） | cookie 过期或复制得不全 | 按第 2 节重新复制一份 |
+| `未登录或 cookie 已失效`（retcode -100/-111） | cookie 过期或复制得不全 | 按第 2 节重新扫码一份 |
 | `触发米游社风控，需要在米游社 App 里完成验证`（10001） | 账号被要求验证，或 cookie 缺 `ltoken` | 打开米游社 App 随便点两下完成验证；确认 cookie 里有 `ltoken`；过几小时再试 |
 | `请求异常（多半是风控/参数被拒）`（-2016） | 请求太频繁 / 参数被拒 | 等一会儿；别手动连点 `--refresh` |
 | `cookie 名下没有原神角色` | 登错号了（比如登成了星铁/绝区零账号） | 换正确的米游社账号 |
+| 二维码扫了没反应 / 手机提示"二维码已失效" | 二维码只活两分钟 | 点「换一张二维码」重新扫（页面会自动换） |
+| 扫码时报 `-3503 请求失败，当前设备或网络环境存在风险` | 建码与轮询的设备号不一致，或少了设备指纹头 | 一般不用管（代码已保证一致）；真遇到就重启 Studio 再来一次 |
+| 扫码时报 `-3005 参数不合法` | passport 那套参数被米游社改了 | 更新 `.env` 里的 `MYS_APP_SALT` / `MYS_APP_VERSION_APP` / `MYS_APP_ID` |
 | 签名突然全部失败 | 米游社改了 App 版本对应的 salt | 见下 |
 
 **salt 失效了怎么办**：`salt` 跟着米游社 App 版本走，官方不公开。真改版时改 `.env` 就行，不用改代码：
@@ -138,6 +258,9 @@ Agent：（读到米游社数据）胡桃 Lv.80，天赋 8/8/8，突破 Boss 材
 ```dotenv
 MYS_SALT=新的32位salt
 MYS_APP_VERSION=对应的版本号
+MYS_APP_SALT=扫码登录那套（社区叫 passSalt）
+MYS_APP_VERSION_APP=扫码登录用的 App 版本号
+MYS_APP_ID=扫码登录用的 app_id（字符串）
 ```
 
 去哪里找新 salt：搜 `mihoyo-api-collect` 的 salt 汇总 issue，或看喵喵插件/Yunzai 仓库最近一次
@@ -161,9 +284,13 @@ MYS_APP_VERSION=对应的版本号
 
 | 文件 | 作用 |
 | --- | --- |
-| `skills/mys_api.py` | 签名、请求、缓存、按需注入、`--check/--refresh/--show` 自检 |
+| `skills/mys_login.py` | **扫码登录**：建码 → 轮询 → 换 v1 `ltoken` → 验证 → 写 `.env`（老浏览器路径留作兜底） |
+| `skills/qr_code.py` | 自带二维码编码器（纯标准库，不依赖 `qrcode`/`Pillow`），终端画 ASCII、页面画 SVG |
+| `skills/mys_api.py` | 签名、请求、缓存、按需注入、`--check/--refresh/--show/--audit` 自检 |
 | `skills/env_reader.py` | `build_avatar_entry()`：展柜和米游社**共用**的角色装配（材料形状一致） |
 | `brain/llm_brain.py` | 只在"玩家提到展柜外角色"时注入【展柜外角色参考】 |
 | `prompts/system_rules.md` | 告诉模型：展柜没有 ≠ 玩家没有；有参考就按参考规划，没参考别编造 |
 | `skills/health_check.py` | `python main.py doctor` / Studio 体检里会报告 cookie 是否配置、缓存有多少角色 |
 | `tests/test_mys_api.py` | 签名公式、UID→区服、TTL、按需注入、错误分类、没配 cookie 不发请求 |
+| `tests/test_mys_login.py` | 扫码流程的协议细节（设备号复用、过期重出、换 token、状态归一） |
+| `tests/test_qr_code.py` | 二维码编码器：与社区实现**逐位比对**（基准见 `tests/fixtures/qr_reference.json`） |

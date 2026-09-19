@@ -254,6 +254,21 @@ def ask_agent(messages, store, uid, open_id):
 
         wallet_notice = f"\n\n💰 【Agent 虚拟账本】当前已攒下：摩拉 {wallet['mora']}，经验书 {wallet['exp_books']} 本。\n📦 【已刷取Boss材料】：{boss_mats_str}\n（注：这仅代表系统近期的打工收益。规划前请严格对比材料缺口与已刷取数量，若已刷取数量 >= 缺口，必须停止安排该任务！）"
 
+        # 🌟 角色养成系统：把"米游社算出来的真实材料缺口"喂给模型（规格书 §21/§38.8）。
+        #    为什么必须注入：不然模型只能靠展柜 + 百科字典估材料数量 —— 估出来的数和玩家背包里
+        #    真实的数量对不上，而且看起来"很有道理"，是最难发现的一类错。
+        #    ★ 数据源由 `GROWTH_DATA_SOURCE` 决定（玩家要求）：默认 `showcase`（角色展柜），
+        #    切成 `calculator` 时**以养成计算器为准**，并把今天该跑的执行路线一起注入
+        #    —— 这样模型才能把"缺什么 → 去哪刷"直接说给玩家，而不是拿展柜里的等级去猜。
+        #    没配 cookie / 没同步过时这段是空串（不打扰模型，也不多花一次请求）。
+        growth_notice = ""
+        try:
+            from brain import growth_tools
+
+            growth_notice, growth_source = growth_tools.growth_source_block()
+        except Exception as exc:        # noqa: BLE001 —— 养成系统挂了绝不能影响规划
+            print(f"⚠️ 养成系统上下文未注入（不影响本轮）：{type(exc).__name__} {exc}")
+
         # 🌟 资源冷却（特产 48h / 矿物 72h / 食材 24h / 魔物 12h）：直接读 BetterGI 日志算出来的，只列"还没刷新"的。
         #    模型据此能认出"霜仙花还没刷新"，或者改推一个已经刷新的材料；角色名→采集物的对应
         #    由代码确定性解析（见 skills/gather_cooldown.resolve_material）。
@@ -273,7 +288,8 @@ def ask_agent(messages, store, uid, open_id):
         model_messages = build_model_messages(
             system_prompt=system_prompt,
             env_context=(
-                store.get("env_context", "") + time_notice + wallet_notice + mys_notice + cooldown_notice
+                store.get("env_context", "") + time_notice + wallet_notice + mys_notice
+                + cooldown_notice + growth_notice
             ),
             history_messages=messages,
         )

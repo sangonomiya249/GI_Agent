@@ -86,6 +86,50 @@ _CANCEL_MARKERS = ("任务被取消", "停止当前执行任务")
 _watch_lock = threading.Lock()
 _active_generation = 0
 
+# ==========================================
+# 🌟 任务结束订阅（养成系统靠它做"执行后重新同步米游社"）
+# ==========================================
+#
+# 为什么放在这里、而不是让养成系统自己轮询：**完成判定只有这里有**。
+# 这 600 行里踩过的坑（跨天换日志、多配置组、取消竞态、原神退出的兜底静默）都不该
+# 在第二处重复实现 —— 重复实现的结果一定是"有一半情况同步不触发"。
+#
+# ⚠️ 回调在**监视线程**里执行，所以：
+#   · 回调里绝不能抛异常（这里包了 try 兜底）；
+#   · 回调里的网络请求（同步米游社）不能阻塞太久 —— 养成系统那边是同步 HTTP，
+#     最坏几秒，可以接受（它本来就在后台线程里）。
+_COMPLETION_HOOKS = []
+
+
+def register_completion_hook(callback):
+    """注册"BetterGI 这轮结束了"的回调。重复注册同一个函数会被忽略（幂等）。"""
+    if not callable(callback):
+        raise TypeError("完成回调必须是可调用对象")
+    with _watch_lock:
+        if callback not in _COMPLETION_HOOKS:
+            _COMPLETION_HOOKS.append(callback)
+    return callback
+
+
+def unregister_completion_hook(callback):
+    with _watch_lock:
+        if callback in _COMPLETION_HOOKS:
+            _COMPLETION_HOOKS.remove(callback)
+
+
+def notify_completion(open_id="CLI_USER"):
+    """把"任务结束了"通知所有订阅者。**任何一个订阅者出问题都不影响其它订阅者。**"""
+    with _watch_lock:
+        hooks = list(_COMPLETION_HOOKS)
+    results = []
+    for hook in hooks:
+        try:
+            results.append(hook(open_id))
+        except Exception as exc:        # noqa: BLE001 —— 联动的锅不能让监视线程背
+            print(f"⚠️ 任务结束联动失败（{getattr(hook, '__name__', hook)}）："
+                  f"{type(exc).__name__} {exc}")
+    return results
+
 
 def today_log_path():
     """BetterGI 主日志路径（按天分割）。"""
@@ -464,6 +508,11 @@ def start_completion_watch(open_id="CLI_USER", timeout_seconds=None):
     )
 
     def _worker():
+        """盯日志直到本轮结束。
+
+        返回值：**True = 走到了一个真正的终态**（完成 / 被取消 / 部分组结束 / 原神退出 / 超时），
+        False/None = 被新一轮监控顶掉了（那一轮不该触发"任务结束"的联动）。
+        """
         collected = []
         warned = False
         start_confirmed = False
@@ -520,7 +569,7 @@ def start_completion_watch(open_id="CLI_USER", timeout_seconds=None):
                         build_report(log_text, _latest_progress(baseline), elapsed),
                         open_id,
                     )
-                    return
+                    return True
 
                 if info["finished"] and (
                     info["flow_done"] or all_groups_done(info, expected_groups)
@@ -541,7 +590,7 @@ def start_completion_watch(open_id="CLI_USER", timeout_seconds=None):
                             else "🎉 BetterGI 配置组执行结束！"
                         )
                     _announce(title, build_report(log_text, progress, elapsed), open_id)
-                    return
+                    return True
 
             # ①.6 有组跑完了、但整条流程的结束标记一直没出现（多组时可能卡在后面的组）：
             #     如果日志也彻底安静下来，就按"结束"报，别干等到超时一个字都不说。
@@ -556,7 +605,7 @@ def start_completion_watch(open_id="CLI_USER", timeout_seconds=None):
                         build_report(log_text, _latest_progress(baseline), elapsed),
                         open_id,
                     )
-                    return
+                    return True
 
             # ①.7 前台跑偏：BGI 会一直「不是原神，暂停」等着（实测每秒一行）。
             #     这跟"崩了"长得一模一样，所以要么告诉玩家，要么帮他切回去。
@@ -582,7 +631,7 @@ def start_completion_watch(open_id="CLI_USER", timeout_seconds=None):
                         build_report(log_text, _latest_progress(baseline), elapsed),
                         open_id,
                     )
-                    return
+                    return True
 
             # ③ 一条龙迟迟没动静 → 提醒一次（常见于启动参数没生效 / 原神没开）
             if not warned and elapsed > START_GRACE_SECONDS:
@@ -609,20 +658,30 @@ def start_completion_watch(open_id="CLI_USER", timeout_seconds=None):
                     ],
                     open_id,
                 )
-                return
+                return True
 
     def _guarded():
-        """把 `_worker` 包一层：**异常必须留痕**。
+        """把 `_worker` 包一层：**异常必须留痕 + 任务结束后通知订阅者**。
 
         ⚠️ 踩过两次的坑：监视线程里一个未捕获异常（UnboundLocalError 那两次）会让线程静默死掉，
         表现就是"完成报告永远发不出来"，而终端上一句提示都没有。这里至少把堆栈打出来。
+
+        🌟 顺带一提**为什么要在 finally 里发通知**：`_worker` 有 5 条结束路径
+        （完成 / 被取消 / 部分组结束 / 原神退出 / 超时），每条都要触发"任务结束了"这件事。
+        放在 finally 里只写一次，以后再加结束路径也不会漏。
         """
+        completed = False
         try:
-            _worker()
+            completed = bool(_worker())
         except Exception as exc:        # noqa: BLE001 —— 任何异常都不许静默
             import traceback
 
             traceback.print_exc()
             print(f"❌ 完成监视线程异常退出（本轮可能收不到完成报告）：{type(exc).__name__} {exc}")
+        finally:
+            if completed:
+                notify_completion(open_id)
+            else:
+                print("ℹ️ 本轮监控被新一轮取代或提前结束，不触发任务结束联动。")
 
     threading.Thread(target=_guarded, daemon=True, name="bgi-completion-watch").start()

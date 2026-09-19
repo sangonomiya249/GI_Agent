@@ -115,6 +115,23 @@ def main():
     print(env_notice)
     memory_manager.save_chat_store(store)
 
+    # ★ 每次启动都把"今天要执行的目标"推给玩家（`GROWTH_STARTUP_PUSH`，玩家明确要求）。
+    #   为什么要每次推：米游社的"已有 / 还差"是**算出来**的，BetterGI 跑完那一刻背包还没
+    #   刷新（同步有延迟），所以"今天该跑什么"不能靠玩家自己记。
+    #   ⚠️ 这里必须走 `push_execution_targets()` 的**主动推送**那条路 —— 展柜那套是"本地
+    #   思考完直接 print"，QQ 上什么都收不到（玩家反馈过的就是这件事）。
+    if getattr(config, "GROWTH_STARTUP_PUSH", True):
+        try:
+            from brain import growth_planner
+
+            growth_planner.register_watcher_hook()
+            # 终端进程用 `CLI_USER`（它属于 feishu_api.LOCAL_TARGETS：只打在本机，不外发）；
+            # 有 QQ / 飞书目标时优先用它 —— 那才是玩家真正看得到的地方。
+            growth_planner.push_execution_targets(
+                open_id=str(store.get("last_target") or "CLI_USER"))
+        except Exception as exc:            # noqa: BLE001 —— 推送失败不该挡住启动
+            print(f"⚠️ 启动推送执行目标失败：{type(exc).__name__} {exc}")
+
     messages = memory_manager.trim_history(messages)
     store["messages"] = messages
     memory_manager.save_chat_store(store)

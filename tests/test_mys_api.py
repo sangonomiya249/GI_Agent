@@ -75,6 +75,94 @@ class ServerAndCookieTests(unittest.TestCase):
         self.assertEqual(mys_api.cookie_account_id("nothing=1"), "")
 
 
+class CookieAuditTests(unittest.TestCase):
+    """cookie 完整性审计。
+
+    为什么值得单独一组用例：**只有 v2 键的 cookie 能通过公共接口**（能列出角色），
+    所以看起来一切正常；但需要登录的接口（养成计算器 `/v1/sync/avatar/list`、
+    `/v2/compute`、战绩 `character/list`）会全部失败。实测踩过，现象是
+    「能列出角色却一直报未登录」，玩家对着 cookie 只能干瞪眼。
+    """
+
+    def test_complete_v1_cookie_passes(self):
+        audit = mys_api.audit_cookie("ltuid=123456789; ltoken=SECRET; cookie_token=C2")
+
+        self.assertTrue(audit["ok"])
+        self.assertEqual(audit["missing"], [])
+        self.assertEqual(audit["hint"], "")
+
+    def test_account_id_alone_is_enough_for_the_id_part(self):
+        audit = mys_api.audit_cookie("account_id=123456789; ltoken=SECRET")
+
+        self.assertTrue(audit["ok"], audit)
+
+    def test_cookie_without_ltoken_is_flagged(self):
+        """`ltuid` 有了但没 `ltoken` —— 实测就是这种最坑。"""
+        audit = mys_api.audit_cookie("ltuid=123456789; account_id=123456789; _MHYUUID=abc")
+
+        self.assertFalse(audit["ok"])
+        self.assertEqual([item["keys"] for item in audit["missing"]], [["ltoken", "cookie_token"]])
+        self.assertIn("ltoken", audit["hint"])
+
+    def test_v2_only_cookie_is_accepted_as_a_calculator_session(self):
+        """只有 v2 那套 = **养成计算器网页登录**得到的会话：够用，但必须标明形态。
+
+        ⚠️ 放行不等于"`ltoken_v2` 就是 v1 `ltoken`" —— 它俩不相等（实测：把
+        `ltoken_v2` 补成 v1 键名、放进 `x-rpc-ltoken` 头都不行）。所以 `has_v1`
+        必须是 False，需要 v1 的功能还能据此分辨。
+        真正的把关在 `finish_login`：它会**真的打接口**验一遍才保存。
+        """
+        audit = mys_api.audit_cookie(
+            "ltuid_v2=285006984; account_id_v2=285006984; ltoken_v2=SECRET; cookie_token_v2=C2"
+        )
+
+        self.assertTrue(audit["ok"])
+        self.assertTrue(audit["has_v2"])
+        self.assertFalse(audit["has_v1"])
+        self.assertEqual(audit["mode"], "calculator")
+        self.assertIn("养成计算器", audit["hint"])
+
+    def test_v1_cookie_is_reported_as_the_app_mode(self):
+        audit = mys_api.audit_cookie("ltuid=285006984; ltoken=SECRET; cookie_token=C2")
+
+        self.assertTrue(audit["ok"])
+        self.assertEqual(audit["mode"], "app")
+        self.assertTrue(audit["has_v1"])
+
+    def test_a_cookie_without_any_token_is_still_flagged(self):
+        audit = mys_api.audit_cookie("ltuid=285006984; account_id=285006984")
+
+        self.assertFalse(audit["ok"])
+        self.assertEqual([item["keys"] for item in audit["missing"]],
+                         [["ltoken", "cookie_token"]])
+        self.assertIn("养成计算器", audit["hint"])          # 提示里要说清去哪儿拿
+
+    def test_missing_id_is_flagged(self):
+        audit = mys_api.audit_cookie("ltoken=SECRET; cookie_token=C2")
+
+        self.assertFalse(audit["ok"])
+        self.assertEqual([item["keys"] for item in audit["missing"]], [["ltuid", "account_id"]])
+
+    def test_empty_cookie_is_reported_as_not_configured(self):
+        audit = mys_api.audit_cookie("")
+
+        self.assertFalse(audit["ok"])
+        self.assertFalse(audit["configured"])
+        self.assertIn("MYS_COOKIE", audit["hint"])
+
+    def test_audit_never_leaks_the_token(self):
+        audit = mys_api.audit_cookie("ltuid=123456789; ltoken=SECRETTOKENVALUE")
+
+        self.assertNotIn("SECRETTOKENVALUE", str(audit))
+        self.assertNotIn("123456789", str(audit))
+
+    def test_audit_uses_the_configured_cookie_by_default(self):
+        with patch.object(config, "MYS_COOKIE", "ltuid=1; ltoken=x"):
+            audit = mys_api.audit_cookie()
+
+        self.assertTrue(audit["ok"])
+
+
 class SnapshotCacheTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()

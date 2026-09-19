@@ -190,9 +190,22 @@ def format_for(target: str, text: str) -> str:
 
 
 def try_send(target: str, text: str) -> bool:
-    """如果目标属于已注册的其它通道就由它发送并返回 True；否则返回 False（调用方继续走原逻辑）。"""
+    """如果目标属于已注册的其它通道就由它发送并返回 True；否则返回 False（调用方继续走原逻辑）。
+
+    ★ 还有一种情况：目标属于**别的进程**才发得出去的通道（QQ 只能由 QQ 机器人进程发）。
+    这时不能返回 False —— 那会让调用方（`feishu_api.send_feishu_msg`）拿 `qq:...`
+    当飞书 open_id 去发，最后**消息凭空消失、日志里连错都没有**（玩家反馈过两次）。
+    所以我们把它塞进跨进程队列（`api/notice_queue.py`），由 QQ 机器人进程取走发送。
+    """
     sender = sender_for(target)
     if sender is None:
+        if belongs_to_another_process(target):
+            from api import notice_queue
+
+            if notice_queue.enqueue(target, text):
+                return True
+            # 入队都失败（队列被占 / 磁盘问题）：至少别静默 —— 打出来让人看得见
+            echo_locally("推送待补发（入队失败）", text)
         return False
     formatted = format_for(target, text)
     prefix = _input_only_prefix(target)
@@ -206,3 +219,16 @@ def try_send(target: str, text: str) -> bool:
     except Exception as exc:  # 通道出错不能把主流程带崩
         print(f"❌ 通道投递失败（{target}）：{exc}")
         return False
+
+
+def belongs_to_another_process(target: str) -> bool:
+    """这个目标是不是"本进程发不了、得靠另一个进程发的通道"（目前只有 QQ）。
+
+    QQ 的发送实现（`qq_bot` 的 sender）只在**机器人进程**里注册；CLI / Studio
+    这两个进程里 `sender_for()` 一定是 None —— 但目标本身是合法的 QQ 会话标识。
+    判据要同时满足：① 是 QQ 目标；② 本进程**没有**注册它的发送器。
+    """
+    text = str(target or "")
+    if not text.startswith(QQ_PREFIX):
+        return False
+    return sender_for(text) is None

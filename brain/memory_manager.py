@@ -17,6 +17,10 @@ def _default_store(uid=None):
         "messages": [],
         "wallet": {"mora": 0, "exp_books": 0, "boss_mats": {}},
         "pending_task": None,
+        # 🌟 "上次跟谁说话"：主动推送（启动推执行目标 / 跑完推下一条路线）靠它找到目标。
+        #    **必须在这里和 load_chat_store() 的白名单里都列出来** ——
+        #    漏一个，值就会被加载时丢掉，表现是"推送静默不出去"（踩过）。
+        "last_target": "",
     }
 
 
@@ -92,6 +96,8 @@ def load_chat_store():
             "messages": raw.get("messages", []),
             "wallet": merged_wallet,
             "pending_task": pending_task,
+            # 主动推送的目标（QQ / 飞书的会话标识）—— 漏了这行值就会被丢掉
+            "last_target": str(raw.get("last_target") or ""),
         }
     except Exception as exc:
         backup = f"{HISTORY_FILE}.corrupt-{time.strftime('%Y%m%d-%H%M%S')}"

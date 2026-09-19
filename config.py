@@ -194,6 +194,30 @@ MYS_CACHE_PATH = get_env(
 MYS_SALT = get_env("MYS_SALT", "xV8v4Qu54lUKrEYFZkJhB8cuOh9Asafs")
 MYS_APP_VERSION = get_env("MYS_APP_VERSION", "2.40.1")
 MYS_CLIENT_TYPE = get_env("MYS_CLIENT_TYPE", "5")
+
+# ==========================================
+# 🌟 米游社"扫码登录"那套（拿 v1 ltoken 的唯一可行之路）
+# ==========================================
+# 米游社把 salt 分得很细，**扫码登录用的是 passport 那套**：
+#   · 网页战绩 / 计算器 → MYS_SALT（上面）
+#   · **扫码登录**（passport-api 的 createQRLogin / queryQRLoginStatus）
+#       → MYS_APP_SALT（下面这个，社区里叫 passSalt），**app_id 是字符串 bll8iq97cem8**，
+#         client_type = 2、User-Agent = okhttp/4.8.0。
+#
+# ⚠️ 实测：用网页 salt、用数字 app_id、或 client_type=3 —— 一律 `-3005 参数不合法`。
+#    换成 passSalt + bll8iq97cem8 + client_type=2 立刻 `retcode 0`。
+#
+# 默认值取自社区实现（xiaoyao-cvs-plugin 的 model/mys/mysTool.js，APP_VERSION 2.70.1）。
+# 米游社改版时报"参数不合法"就更新这几项（.env 里改，代码不用动）。
+MYS_APP_SALT = get_env("MYS_APP_SALT", "JwYDpKvLj6MrMqqYU6jTKF17KNO2PXoS")
+MYS_APP_VERSION_APP = get_env("MYS_APP_VERSION_APP", "2.70.1")
+# 扫码登录用的 app_id（**字符串**，不是数字）
+MYS_APP_ID = get_env("MYS_APP_ID", "bll8iq97cem8")
+# passport 那套请求头里还带一个"设备指纹"。社区实现里是个写死的值，
+# 实测少这一个头，轮询扫码状态会被判成 `-3503 当前设备或网络环境存在风险`。
+MYS_DEVICE_FP = get_env("MYS_DEVICE_FP", "38d7ee0e96649")
+# passport 那套的 Android 版本号（社区实现用 11；它和 APP_VERSION 是两回事）
+MYS_APP_SYS_VERSION = get_env("MYS_APP_SYS_VERSION", "11")
 # 一次对话里最多为几个"展柜外角色"去拉天赋详情（每次请求都可能触碰风控，别贪）
 MYS_DETAIL_MAX_PER_TURN = get_int_env("MYS_DETAIL_MAX_PER_TURN", 3)
 # 个人战绩接口的基础域名（国际服是 bbs-api-os.hoyolab.com；这里只做国服）
@@ -203,6 +227,85 @@ MYS_API_HOST = get_env("MYS_API_HOST", "https://api-takumi.mihoyo.com")
 # 刷秘境时用哪种树脂（对应 BetterGI 自动秘境「指定树脂使用次数」里的条目）：
 #   原粹树脂20（默认，20 体力一次） / 原粹树脂40 / 浓缩树脂
 DOMAIN_RESIN_PREFERENCE = get_env("DOMAIN_RESIN_PREFERENCE", "原粹树脂20")
+
+# ==========================================
+# 🌟 角色养成系统（brain/growth_*.py + skills/mys_calculator.py + skills/mys_inventory.py）
+# ==========================================
+# 事实来源分工（规格书 §41）：
+#   米游社 = 库存事实来源      → skills/mys_inventory.py（同步） + skills/mys_calculator.py（读背包）
+#   养成计算器 = 需求来源      → skills/mys_calculator.py（算材料，绝不在代码里硬编码需求表）
+#   BetterGI = 执行器          → 照旧，**不允许**回写库存
+#
+# ⚠️ 这条链路依赖 `MYS_COOKIE`；没配 cookie 时整个养成系统只做"本地已有快照"的规划，
+#    任何网络请求都不会发，Studio 的养成页会明确显示"未同步"。
+GROWTH_DB_PATH = get_env("GROWTH_DB_PATH", os.path.join(MEMORY_DIR, "growth.db"))
+# 米游社原始响应与库存快照的存放目录（规格书 §6）：
+#   memory/mys/inventory_latest.json      当前库存（权威副本，人可读）
+#   memory/mys/snapshots/                每次同步的历史快照（对比"这次刷了多少"）
+#   memory/mys/character/                角色原始详情（排查接口改版）
+#   memory/mys/calculator/               养成计算器原始响应（角色列表 / 背包 / 每次 compute）
+GROWTH_MYS_DIR = get_env("GROWTH_MYS_DIR", os.path.join(MEMORY_DIR, "mys"))
+# 养成计算器所在的域名。⚠️ 是 `api-takumi.mihoyo.com`，**不是** `api-takumi-static.mihoyo.com`
+# ——后者是静态资源域，打上去只会得到一个 Go 的 `404 page not found`（实测踩过）。
+MYS_CALC_HOST = get_env("MYS_CALC_HOST", "https://api-takumi.mihoyo.com")
+MYS_CALC_WEB_URL = get_env(
+    "MYS_CALC_WEB_URL",
+    "https://act.mihoyo.com/ys/event/calculator/index.html",
+)
+# 计算器所有接口共用的路径前缀（米游社养成计算器自己的活动命名空间）。
+# 这一串来自它前端 bundle 里的 `var m="/event/e20200928calculate"`，已实测可用。
+MYS_CALC_PREFIX = get_env("MYS_CALC_PREFIX", "")
+# 三条接口路径。默认值**已实测**（200 + retcode 0）：
+#   /v1/avatar/list        全量角色图鉴（含天赋 id 与槽位名，用来喂 compute）
+#   /v1/sync/avatar/list   账号里拥有的角色（真实等级，需要登录）
+#   /v2/compute            算材料，响应分 avatar_consume / avatar_skill_consume / weapon_consume
+# 米游社再次改版时，用 `python -m skills.mys_calculator --probe` 探到新路径填进这三项即可。
+MYS_CALC_PATH_AVATAR_LIST = get_env("MYS_CALC_PATH_AVATAR_LIST", "")
+MYS_CALC_PATH_COMPUTE = get_env("MYS_CALC_PATH_COMPUTE", "")
+MYS_CALC_PATH_MY_ITEMS = get_env("MYS_CALC_PATH_MY_ITEMS", "")
+
+# 扫码登录用的**独立浏览器配置目录**（见 skills/mys_login.py）。
+# 为什么是独立目录而不是你日常浏览器的 profile：
+#   · 不会读到你其它网站的登录状态，也不会动你日常浏览器的任何东西；
+#   · 登录状态落在这里，登录完就能从它的 cookie 库里读出米游社凭据；
+#   · 想"退出登录"直接删掉这个目录即可。
+MYS_LOGIN_PROFILE_DIR = get_env(
+    "MYS_LOGIN_PROFILE_DIR", os.path.join(PROJECT_ROOT, ".studio-profile", "mys-login")
+)
+# 加载 Studio / 启动 Agent 时是否自动同步一次米游社库存（规格书 §5，默认开）
+GROWTH_STARTUP_SYNC = get_env("GROWTH_STARTUP_SYNC", "1") == "1"
+# 自动同步周期（规格书 §5 的四个选项）：
+#   startup = 每次启动（默认） / manual = 只手动 / 30 / 120 = 每 N 分钟（单位：分钟）
+GROWTH_SYNC_MODE = get_env("GROWTH_SYNC_MODE", "startup")
+# BetterGI 养成任务跑完是否自动重新同步库存再重算缺口（规格书 §19，**核心机制**，默认开）
+GROWTH_POST_TASK_SYNC = get_env("GROWTH_POST_TASK_SYNC", "1") == "1"
+# 库存"多久算过期"（小时）：超过就标 stale，前端必须显示"这不是实时数据"。
+# 比 MYS_CACHE_TTL_HOURS（48，角色名单）短得多 —— 材料是每次执行后都要重算的东西。
+GROWTH_INVENTORY_STALE_HOURS = get_int_env("GROWTH_INVENTORY_STALE_HOURS", 12)
+# 规划时最多为几个角色去米游社算材料（每个角色 1 次 compute 请求；风控严时别调大）
+GROWTH_COMPUTE_MAX_PER_PLAN = get_int_env("GROWTH_COMPUTE_MAX_PER_PLAN", 8)
+# 单个角色的 compute 结果缓存多久（分钟）：同一份目标反复点"重新规划"不该反复请求米游社。
+# 任何一次库存同步 / 目标变更都会让缓存失效（见 brain/growth_planner.invalidate_cache）。
+GROWTH_COMPUTE_CACHE_MINUTES = get_int_env("GROWTH_COMPUTE_CACHE_MINUTES", 30)
+# ★ 材料结果的"每天一次"策略（默认开）：同一天里不管开关程序几次，都直接用**数据库里**
+#   存好的结果，一个请求都不发；到了新的一天（业务日，凌晨 4 点换日）才自动重拉一次。
+#   想立刻更新：养成页点「刷新材料数据」—— 那条路强制重拉，无视缓存。
+#   为什么默认这么做：算材料是每个角色 2 个请求，米游社风控很敏感；
+#   玩家明确要求"每天自动拉一次，关掉再打开别拉，要更新我自己点"。
+#   设成 0 退回"30 分钟内存缓存"的老行为（关掉再打开会重拉一轮）。
+GROWTH_COMPUTE_DAILY_CACHE = get_env("GROWTH_COMPUTE_DAILY_CACHE", "1") != "0"
+# ★ 执行模式（玩家要求）：all = 一次性全部下发（默认，沿用原调度）；
+#   stepwise = 分批次，一条路线一条地问（先推总路线详情，回 y 就跑这条，跑完推下一条）。
+#   没路线的材料两种模式下都跳过（明细表照常显示，只是不占批次）。
+GROWTH_EXECUTION_MODE = get_env("GROWTH_EXECUTION_MODE", "all")
+# ★ 养成数据源（玩家要求）：showcase = 用角色展柜（Enka）那套上下文（默认，保持原行为）；
+#   calculator = 用米游社养成计算器算出来的养成计划。选 calculator 时会把当前养成计划
+#   推送给玩家（展柜那条路以前推不到 QQ，见 docs/GROWTH.md）。
+GROWTH_DATA_SOURCE = get_env("GROWTH_DATA_SOURCE", "showcase")
+# ★ 每次启动 Agent 都把"今天要执行的目标"推送给玩家（玩家要求，默认开）。
+#   为什么要每次推：米游社的材料是**当天**算的，跑完那一刻读不到真实背包变化
+#   （同步有延迟），所以"今天该跑什么"必须以推送为准，而不是靠玩家自己记。
+GROWTH_STARTUP_PUSH = get_env("GROWTH_STARTUP_PUSH", "1") != "0"
 
 # ==========================================
 # 🌟 BetterGI 运行状态监控（任务完成后回终端报信）
