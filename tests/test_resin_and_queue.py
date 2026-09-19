@@ -210,6 +210,46 @@ class ResinMathTests(unittest.TestCase):
         # 4 绿 + 3 蓝(=9 绿) = 13 等效绿；20 体力一趟约 10.27 绿，所以要 2 趟。
         self.assertEqual(material_planner._runs_needed(task), 2)
 
+    def test_completed_energy_task_never_gets_a_run(self):
+        for kind, extra in (
+            (material_planner.TASK_DOMAIN, {"phase": "talent"}),
+            (material_planner.TASK_LEYLINE, {"route": material_planner.LEYLINE_EXP}),
+            (material_planner.TASK_BOSS, {}),
+        ):
+            task = {
+                "task_type": kind,
+                "missing": 0,
+                "material": "已齐材料",
+                **extra,
+            }
+            material_planner._apply_runs(
+                task,
+                resin_state={"available": True, "current": 69},
+            )
+            self.assertEqual(task["count"], 0)
+            self.assertEqual(task["resin"], 0)
+            self.assertIn("缺口为 0", task["count_note"])
+
+    def test_non_domain_materials_are_keyed_by_name(self):
+        row = {"character_id": 1, "phase": "character_level"}
+        source = {"type": material_planner.TASK_HUNT, "item_id": 99}
+        first = {"item_id": 99, "item_name": "孢囊晶尘"}
+        second = {"item_id": 99, "item_name": "蕈兽孢子"}
+        self.assertNotEqual(
+            material_planner._task_key(row, first, source),
+            material_planner._task_key(row, second, source),
+        )
+
+    def test_same_non_domain_material_can_merge_across_phases(self):
+        source = {"type": material_planner.TASK_HUNT, "item_id": 99}
+        material = {"item_id": 99, "item_name": "孢囊晶尘"}
+        level = {"character_id": 1, "phase": "character_level"}
+        talent = {"character_id": 1, "phase": "talent"}
+        self.assertEqual(
+            material_planner._task_key(level, material, source),
+            material_planner._task_key(talent, material, source),
+        )
+
 
 class PriorityTests(unittest.TestCase):
     """玩家给定的刷取顺序。"""

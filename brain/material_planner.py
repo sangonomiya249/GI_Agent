@@ -761,9 +761,10 @@ def build_tasks(phase_rows, planned=None, weekday=None, include_completed=False,
                 #    以前只把 `missing` 取最大值、`required` 留在第一阶段，
                 #    结果界面上出现"需要 647,990 / 缺 3,182,500"这种自相矛盾的组合 ——
                 #    玩家看半天也分不清哪个是哪个（被反馈过）。
-                existing["phases"].append({"phase": row["phase"],
-                                           "phase_label": row["phase_label"],
-                                           "missing": material["missing"]})
+                if not any(item.get("phase") == row["phase"] for item in existing["phases"]):
+                    existing["phases"].append({"phase": row["phase"],
+                                               "phase_label": row["phase_label"],
+                                               "missing": material["missing"]})
                 existing["required"] += int(material["required"] or 0)
                 existing["missing"] += int(material["missing"] or 0)
                 existing["owned"] += int(material.get("owned") or 0)
@@ -865,7 +866,14 @@ def _task_key(row, material, source):
             str(row.get("phase") or ""),
             str(source.get("domain") or source.get("route") or ""),
         )
-    return int(material.get("item_id") or source.get("item_id") or 0)
+    # 非秘境材料恢复为“一个材料一条任务”：
+    # 敌人掉落 / 特产 / 矿物等没有副本品质期望，不能因为共享族群路线
+    # 被拼成“某材料 等 2 种”。同名材料跨阶段仍要共享库存、合并缺口，
+    # 所以这里按材料名隔离，不把角色和阶段放进 key。
+    return (
+        "material",
+        str(material.get("item_name") or material.get("name") or "").strip(),
+    )
 
 
 def _task_key_text(key):
@@ -923,6 +931,13 @@ def _apply_runs(task, resin_state=None, budget=None):
     给了就以它为准 —— 它是"按优先级分完一轮"之后的结果。
     """
     kind = task["task_type"]
+    # 已齐任务不参与本轮路线安排。这里必须在所有类型分支之前拦截：
+    # 体力可用时，后面的“当前体力够几趟”只是能力上限，不能变成实际排程。
+    if int(task.get("missing") or 0) <= 0:
+        task["count"] = 0
+        task["resin"] = 0
+        task["count_note"] = "缺口为 0，本轮不安排路线"
+        return
     current = int((resin_state or {}).get("current") or 0) if (resin_state or {}).get("available") else None
     if kind == TASK_DOMAIN:
         need = _runs_needed(task)
