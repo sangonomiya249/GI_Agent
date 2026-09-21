@@ -38,6 +38,12 @@ RESIN_PER_BOSS = 40
 RESIN_REGEN_SECONDS = 8 * 60
 RESIN_PER_DAY = 24 * 60 * 60 // RESIN_REGEN_SECONDS        # 180
 
+# 体力上限：**到 200 就回满了**，不会再涨。
+# ⚠️ 这条必须有：手动录入时拿不到上限（dailyNote 被风控挡着），
+#    不封顶的话"按 8 分钟 1 点推算"会一路加上去 ——
+#    实测卡片显示过 345 这种不可能的数字（玩家反馈）。
+RESIN_MAX_DEFAULT = 200
+
 # 便笺接口是有限流的风控接口：同进程内缓存一小段时间，避免页面轮询把它打爆。
 _CACHE_SECONDS = 120
 _LOCK = threading.RLock()
@@ -214,9 +220,12 @@ def set_manual(value, top=0, uid=None, when=None):
         current = max(0, int(value))
     except (TypeError, ValueError):
         return {"ok": False, "error": "体力得是数字"}
+    # 上限默认按游戏上限 200：玩家填了 200 以上（抄错/看错）时也按 200 记，
+    # 免得后面回涨推算从一个不可能的数字开始。
+    limit = int(top or 0) or RESIN_MAX_DEFAULT
     record = {
-        "current": current,
-        "max": int(top or 0) or None,
+        "current": min(current, limit),
+        "max": limit,
         "uid": str(uid or config.DEFAULT_UID or ""),
         "at": (when or _now()).strftime(mys_api._TIME_FORMAT),
     }
@@ -263,22 +272,26 @@ def manual_state(now=None):
     except (TypeError, ValueError):
         stamp = None
     base = int(record.get("current") or 0)
-    top = int(record.get("max") or 0) or None
+    # ⚠️ 没记上限时按**游戏上限 200** 封顶：不封顶的话回涨会一路加上去
+    #    （玩家实测看到过 345 —— 那是不可能的数字，也会让"够几趟"算错）。
+    top = int(record.get("max") or 0) or RESIN_MAX_DEFAULT
     elapsed = int((now - stamp).total_seconds()) if stamp else 0
     recovered = max(0, elapsed) // RESIN_REGEN_SECONDS
-    current = base + recovered
-    if top:
-        current = min(current, top)
+    current = min(base + recovered, top)
+    full = current >= top
     return {
         "available": True,
         "current": int(current),
-        "max": int(top or 0),
+        "max": int(top),
         "base": base,
+        "full": bool(full),
         "recorded_at": record.get("at") or "",
-        "recovered": int(recovered),
+        # 回满之后就不再"回涨"了（免得显示"已回涨 47 点"这种看不懂的数字）
+        "recovered": int(min(recovered, max(0, top - base))),
         "age_seconds": max(0, elapsed),
         "stale": bool(stamp and (now - stamp).total_seconds() > 12 * 3600),
-        "source": "手动录入（按 8 分钟 1 点推算已回涨）",
+        "source": ("体力已回满（按 8 分钟 1 点推算）" if full
+                   else "手动录入（按 8 分钟 1 点推算已回涨）"),
         "reason": "",
         "cached": False,
     }
@@ -324,6 +337,46 @@ def probe(uid=None, server=None, cookie=None, force=False, timeout=15, path=None
         _CACHE["value"] = dict(state)
         _CACHE["at"] = _now()
     return state
+
+
+def refresh(uid=None, server=None, cookie=None, timeout=15, path=None):
+    """**手动拉取一次实时体力**（界面上那个「拉取实时体力」按钮走这里）。
+
+    与 `probe()` 的区别只在"要不要真的打接口"：
+      · `probe()` 是规划时顺手读的：cookie 形态不支持就**不发请求**（省得白打风控接口）；
+      · `refresh()` 是玩家**主动点的**：不管三七二十一先真打一次，
+        这样才能回答"现在到底能不能读到实时体力"，而不是拿缓存/推算糊弄。
+
+    返回 `{"ok", "from_api", "state", "note"}`：
+      · `from_api=True`  → 真的读到了实时体力（state 就是它）；
+      · `from_api=False` → 接口读不到，`note` 写明原因，`state` 退回"手动记的 + 回涨推算"。
+    """
+    cache_clear()
+    if uid is None and not _cookie_has_v1(cookie):
+        # 连 v1 令牌都没有：明确告诉玩家"这份 cookie 读不了体力"，别假装试过了
+        state = probe(uid=uid, server=server, cookie=cookie, force=True,
+                      timeout=timeout, path=path)
+        return {"ok": bool(state.get("available")), "from_api": False, "state": state,
+                "note": state.get("api_reason") or state.get("reason") or "读不到实时体力"}
+
+    state = current_resin(uid=uid, server=server, cookie=cookie, force=True,
+                          timeout=timeout, path=path)
+    if state.get("available"):
+        return {"ok": True, "from_api": True, "state": state,
+                "note": f"✅ 已拉取实时体力：{state.get('current')}"
+                        + (f"/{state['max']}" if state.get("max") else "")}
+    fallback = probe(uid=uid, server=server, cookie=cookie, force=True,
+                     timeout=timeout, path=path)
+    return {"ok": bool(fallback.get("available")), "from_api": False, "state": fallback,
+            "note": f"⚠️ 米游社没给实时体力（{state.get('reason') or '未知原因'}）；"
+                    f"{'改用你手动记的那份推算' if fallback.get('available') else '也还没手动记过体力'}"}
+
+
+def _cookie_has_v1(cookie=None):
+    try:
+        return bool(mys_api.audit_cookie(cookie).get("has_v1"))
+    except Exception:                       # noqa: BLE001
+        return False
 
 
 def status():

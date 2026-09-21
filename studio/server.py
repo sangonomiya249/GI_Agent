@@ -1394,6 +1394,26 @@ def create_app(runner=None, env_path=None, channels=None):
                         "record": result.get("record"),
                         "note": "已记下。体力按 8 分钟回涨 1 点自动往后推算，趟数会按它算。"})
 
+    @app.post("/api/growth/resin/refresh")
+    def api_growth_resin_refresh():
+        """**手动拉取一次实时体力**（玩家主动点的按钮）。
+
+        与规划时那次"顺手读"的区别：这里**真的会打一次米游社**，所以它回答的是
+        "现在到底能不能读到实时体力"。读不到也如实说明原因（这个账号的记录接口会被
+        `5003 账号数据异常` 拦），并退回"手动记的 + 按 8 分钟回涨推算"那份。
+        """
+        try:
+            from skills import mys_resin
+        except Exception as exc:        # noqa: BLE001
+            return jsonify({"ok": False, "error": f"模块加载失败：{exc}"})
+        result = mys_resin.refresh()
+        return jsonify({
+            "ok": True,
+            "from_api": bool(result.get("from_api")),
+            "resin": result.get("state") or {},
+            "note": result.get("note") or "",
+        })
+
     @app.get("/api/growth/history")
     def api_growth_history():
         """同步历史 + 执行历史 + 快照列表（规格书 §32）。"""

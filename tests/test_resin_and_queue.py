@@ -11,6 +11,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
+import config
 from brain import execution_queue, material_planner, resin_math
 from skills import mys_resin
 
@@ -208,7 +209,10 @@ class ResinMathTests(unittest.TestCase):
             ],
         }
         # 4 绿 + 3 蓝(=9 绿) = 13 等效绿；20 体力一趟约 10.27 绿，所以要 2 趟。
-        self.assertEqual(material_planner._runs_needed(task), 2)
+        # ⚠️ 必须把树脂策略固定成 20：玩家 `.env` 里若是「原粹树脂40」（一次 40 体力），
+        #    每趟产出翻倍 → 13 绿只要 1 趟。这条断言是拿 20 算的，别跟着玩家的配置变。
+        with patch.object(config, "DOMAIN_RESIN_PREFERENCE", "原粹树脂20"):
+            self.assertEqual(material_planner._runs_needed(task), 2)
 
     def test_completed_energy_task_never_gets_a_run(self):
         for kind, extra in (

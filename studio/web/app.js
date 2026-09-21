@@ -1298,12 +1298,32 @@ function renderGrowthInventory(data) {
     : `<span class="muted">未知（${escapeHtml(resin.reason || "还没记过")}）</span>`;
   rows.push(`<div class="growth-line">
     💧 当前体力：${resinNow}
-    <input id="f-growth-resin" class="input sm" type="number" min="0" max="999"
-           placeholder="填当前体力" style="width:8em;margin-left:6px" />
+    <button class="btn ghost sm" data-growth-resin-refresh
+            title="真的打一次米游社读现在的实时体力；读不到会说明原因">拉取实时体力</button>
+    <input id="f-growth-resin" class="input sm" type="number" min="0" max="200"
+           placeholder="当前体力" style="width:8em;margin-left:6px" />
     <button class="btn ghost sm" data-growth-resin-save>记下体力</button>
-    <span class="muted">—— 填一次就够：按 8 分钟 1 点自动回涨推算，趟数会按它算</span>
+    <span class="muted">—— 接口读不到时才需要手填：填一次按 8 分钟 1 点回涨推算（上限 200）</span>
   </div>`);
   $("#growth-inventory").innerHTML = rows.join("");
+}
+
+/** 手动拉取实时体力（真打一次米游社，不是拿推算糊弄）。 */
+async function refreshGrowthResin(button) {
+  if (button) { button.disabled = true; button.textContent = "拉取中…"; }
+  try {
+    const data = await api("/api/growth/resin/refresh", { method: "POST" });
+    if (!data.ok) { toast(data.error || "拉取失败", "error"); return; }
+    const state = data.resin || {};
+    if (data.from_api) {
+      toast(`✅ 已读到实时体力：${state.current}${state.max ? "/" + state.max : ""}`);
+    } else {
+      toast(data.note || "读不到实时体力", "warn", 7000);
+    }
+    await loadGrowth();
+  } finally {
+    if (button) { button.disabled = false; button.textContent = "拉取实时体力"; }
+  }
 }
 
 /** 保存当前体力（填了值就按它算趟数）。 */
@@ -2046,8 +2066,10 @@ function setupGrowthPage() {
   const inventory = $("#growth-inventory");
   if (inventory && inventory.addEventListener) {
     inventory.addEventListener("click", (event) => {
-      const save = event.target && event.target.closest
-        ? event.target.closest("[data-growth-resin-save]") : null;
+      const target = event.target && event.target.closest ? event.target : null;
+      const refreshResin = target ? target.closest("[data-growth-resin-refresh]") : null;
+      if (refreshResin) { refreshGrowthResin(refreshResin); return; }
+      const save = target ? target.closest("[data-growth-resin-save]") : null;
       if (save) saveGrowthResin();
     });
     inventory.addEventListener("keydown", (event) => {
